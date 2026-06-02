@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const { query } = require('../config/db');
 const { enviarCodigoActivacion, smtpConfigurado, ADMIN_EMAIL } = require('../utils/licenciaEmail');
 const { firmarToken, verificarToken } = require('../utils/licenciaToken');
+const { ensureLicenciaTables } = require('../utils/ensureLicenciaTables');
 
 const CODIGO_EXPIRA_HORAS = 48;
 const MAX_SOLICITUDES_HORA = 5;
@@ -30,6 +31,7 @@ async function solicitudesRecientes(deviceId) {
 
 async function solicitarCodigo(req, res) {
   try {
+    await ensureLicenciaTables();
     const deviceId = String(req.body.deviceId || '').trim();
     const etiqueta = String(req.body.etiqueta || '').trim().slice(0, 120) || null;
 
@@ -82,17 +84,19 @@ async function solicitarCodigo(req, res) {
     });
   } catch (error) {
     console.error('licencia/solicitar:', error.message);
+    if (error.code === 'SMTP_NOT_CONFIGURED') {
+      return res.status(503).json({ success: false, message: error.message });
+    }
     return res.status(500).json({
       success: false,
-      message: error.code === 'SMTP_NOT_CONFIGURED'
-        ? error.message
-        : 'No se pudo enviar el código. Verifique SMTP o intente más tarde.',
+      message: 'No se pudo enviar el código. Verifique SMTP o intente más tarde.',
     });
   }
 }
 
 async function verificarCodigo(req, res) {
   try {
+    await ensureLicenciaTables();
     const deviceId = String(req.body.deviceId || '').trim();
     const codigo = String(req.body.codigo || '').replace(/\D/g, '');
 
@@ -146,6 +150,7 @@ async function verificarCodigo(req, res) {
 
 async function estadoLicencia(req, res) {
   try {
+    await ensureLicenciaTables();
     const deviceId = String(req.query.deviceId || '').trim();
     const token = String(req.query.token || req.headers['x-licencia-token'] || '').trim();
 

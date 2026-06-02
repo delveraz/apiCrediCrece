@@ -1,0 +1,31 @@
+{
+  "name": "microfinanzas-api",
+  "version": "1.0.0",
+  "description": "API intermedia Expo SQLite ↔ TiDB Cloud (MySQL)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node src/scripts/migrate.js",
+    "fix-schema": "node src/scripts/fix-schema.js",
+    "seed": "node src/scripts/seed.js",
+    "reset-cloud": "node src/scripts/reset-cloud.js",
+    "reset-cloud:admin": "node src/scripts/reset-cloud.js --con-admin",
+    "reset-cartera": "node src/scripts/reset-cartera.js",
+    "plantilla-carga": "node src/scripts/generar-plantilla-carga.js",
+    "repair-fiadores": "node src/scripts/repair-fiadores.js",
+    "fix-cedulas": "node src/scripts/fix-cedulas.js",
+    "ensure-indexes": "node -e \"require('./src/utils/ensureIndexes').ensurePerformanceIndexes().then(n=>console.log('indexes',n)).catch(e=>{console.error(e);process.exit(1)})\"",
+    "seed-demo": "node src/scripts/seed-demo-esteli.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "mysql2": "^3.14.1",
+    "uuid": "^11.1.0",
+    "xlsx": "^0.18.5"
+  }
+}

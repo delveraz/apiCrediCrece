@@ -83,6 +83,7 @@ const generarAgendaDeCobro = (fechaInicioISO, plazoSemanas, diasDeCobro = ['LUNE
       } catch {
         continue;
       }
+      if (fechaISO === inicioStr) continue;
       agenda.push({
         fecha_programada: fechaISO,
         monto_programado: cuotaPorDia,

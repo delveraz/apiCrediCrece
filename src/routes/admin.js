@@ -23,6 +23,7 @@ const { buildAgendaCobrador, buildCumplimientoBatch, diaCobroDeFecha } = require
 const { diaCobroHoy } = require('../utils/diasCobro');
 const { validarFilas, importarFilas } = require('../utils/cargaMasivaPrestamos');
 const { normalizarCedula, validarCedula } = require('../utils/cedulaNic');
+const { datosWhatsAppCliente } = require('../utils/whatsappCliente');
 const { generarRespaldoSql } = require('../utils/respaldoSql');
 
 const txt = (v) => {
@@ -231,7 +232,7 @@ async function getSecuenciaCliente(req, res) {
 async function listPrestamosActivos(req, res) {
   try {
     const rows = await query(
-      `SELECT p.*, c.nombre_completo, c.cedula FROM Prestamos p
+      `SELECT p.*, c.nombre_completo, c.cedula, c.telefono FROM Prestamos p
        JOIN Clientes c ON p.cliente_id = c.id
        WHERE p.estado = 'Activo' AND p.deleted_at IS NULL
        ORDER BY c.nombre_completo`
@@ -682,8 +683,16 @@ async function crearPrestamo(req, res) {
         [cuota.id || uuidv4(), id, cuota.fecha_programada, cuota.monto_programado]
       );
     }
+    const [cliRows] = await conn.execute(
+      'SELECT nombre_completo, telefono FROM Clientes WHERE id = ? LIMIT 1',
+      [p.cliente_id]
+    );
     await conn.commit();
-    return res.json({ success: true, id });
+    return res.json({
+      success: true,
+      id,
+      cliente_whatsapp: datosWhatsAppCliente(cliRows[0]),
+    });
   } catch (e) {
     await conn.rollback();
     return res.status(500).json({ success: false, message: e.message });
@@ -797,7 +806,7 @@ async function listPagosDelDia(req, res) {
     let sql = `
       SELECT pg.id, pg.prestamo_id, pg.cobrador_id, pg.monto_pagado, pg.fecha_pago,
              pg.latitud, pg.longitud, pg.updated_at,
-             c.id AS cliente_id, c.nombre_completo, c.cedula,
+             c.id AS cliente_id, c.nombre_completo, c.cedula, c.telefono,
              u.nombre_completo AS cobrador_nombre, p.saldo_pendiente, p.estado AS estado_prestamo,
              p.fecha_desembolso, p.plazo_semanas, p.dias_de_cobro
       FROM Pagos pg
@@ -951,8 +960,16 @@ async function renovacion(req, res) {
         [c.id || uuidv4(), np.id, c.fecha_programada, c.monto_programado]
       );
     }
+    const [cliRows] = await conn.execute(
+      'SELECT nombre_completo, telefono FROM Clientes WHERE id = ? LIMIT 1',
+      [np.cliente_id]
+    );
     await conn.commit();
-    return res.json({ success: true, id: np.id });
+    return res.json({
+      success: true,
+      id: np.id,
+      cliente_whatsapp: datosWhatsAppCliente(cliRows[0]),
+    });
   } catch (e) {
     await conn.rollback();
     return res.status(500).json({ success: false, message: e.message });

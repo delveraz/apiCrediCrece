@@ -9,6 +9,7 @@ const { rangoDiaLocal } = require('../utils/fechasSql');
  */
 async function loadAgendaAdminHoy() {
     const hoy = new Date().toISOString().split('T')[0];
+    const { inicio: diaIni, fin: diaFin } = rangoDiaLocal(hoy);
     await initSecuenciaCliente(query);
     const secRows = await query(`SELECT valor FROM Parametros_Globales WHERE clave = 'SEC_CLIENTE'`);
     const secuencia = secRows[0]?.valor || '0';

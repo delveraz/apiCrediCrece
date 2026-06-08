@@ -9,12 +9,14 @@ const admin = require('./routes/admin');
 const adminCampo = require('./routes/adminCampo');
 const cobrador = require('./routes/cobrador');
 const licencia = require('./routes/licencia');
+const { guardEscrituraActiva } = require('./middleware/guardEscrituraActiva');
 
 const app = express();
 
 app.use(cors());
 app.use(compression({ threshold: 1024 }));
 app.use(express.json({ limit: '4mb' }));
+app.use('/api', guardEscrituraActiva);
 
 app.get('/', (req, res) => {
   res.json({

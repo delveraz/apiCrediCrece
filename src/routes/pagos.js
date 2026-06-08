@@ -1,4 +1,5 @@
 const { getConnection } = require('../config/db');
+const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
 
 /**
  * Recibe lote de pagos offline desde SQLite y los persiste en TiDB Cloud.
@@ -8,6 +9,13 @@ async function syncMasivo(req, res) {
   const { pagos } = req.body;
   if (!Array.isArray(pagos) || pagos.length === 0) {
     return res.status(400).json({ success: false, message: 'Lista de pagos vacía.' });
+  }
+
+  try {
+    const cobId = req.operadorId || pagos[0]?.cobrador_id;
+    await exigirUsuarioActivo(cobId);
+  } catch (e) {
+    return responderErrorUsuario(res, e);
   }
 
   const conn = await getConnection();

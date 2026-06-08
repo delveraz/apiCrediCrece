@@ -15,6 +15,7 @@ const { insertMany } = require('../utils/bulkSql');
 const { buildRutaDiariaAdmin } = require('../utils/rutaDiariaAdmin');
 const { rangoDiaLocal } = require('../utils/fechasSql');
 const { ensureRutaForCobrador, agregarClienteARuta } = require('../utils/rutas');
+const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
 
 /**
  * Clientes asignados al cobrador + ruta del dia.
@@ -320,6 +321,8 @@ async function pushSync(req, res) {
       cobradorId,
       cierres = [],
     } = req.body;
+
+    await exigirUsuarioActivo(cobradorId || req.operadorId, conn);
 
     const prestamosNuevos = [];
     const prestamosCerrados = [];
@@ -900,6 +903,9 @@ async function pushSync(req, res) {
     });
   } catch (e) {
     await conn.rollback();
+    if (e.code === 'cuenta_inactiva' || e.status === 403) {
+      return responderErrorUsuario(res, e);
+    }
     return res.status(500).json({ success: false, message: e.message });
   } finally {
     conn.release();
@@ -954,6 +960,7 @@ async function crearSolicitudCorreccion(req, res) {
     }
     const pago = pagoOk[0];
     const cobradorId = s.cobrador_id || pago.cobrador_id;
+    await exigirUsuarioActivo(cobradorId || req.operadorId, conn);
     const id = txt(s.id) || `sol-${Date.now()}`;
 
     await conn.beginTransaction();
@@ -989,6 +996,9 @@ async function crearSolicitudCorreccion(req, res) {
     return res.json({ success: true, id });
   } catch (e) {
     await conn.rollback();
+    if (e.code === 'cuenta_inactiva' || e.status === 403) {
+      return responderErrorUsuario(res, e);
+    }
     return res.status(500).json({ success: false, message: e.message });
   } finally {
     conn.release();

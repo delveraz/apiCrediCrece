@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { calcularLiquidacionAnticipada } = require('./finanzasNube');
+const { exigirUsuarioActivo } = require('./assertUsuarioActivo');
 
 async function resolverCobradorAsignado(conn, prestamoId) {
   const [rows] = await conn.execute(
@@ -53,6 +54,8 @@ async function registrarPagoEnNube(conn, opts) {
     tipo = 'personalizado',
     num_cuotas: numCuotas,
   } = opts;
+
+  if (operadorId) await exigirUsuarioActivo(operadorId, conn);
 
   const [prestRows] = await conn.execute(
     `SELECT * FROM Prestamos WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
@@ -130,6 +133,7 @@ async function registrarPagoEnNube(conn, opts) {
 
 async function registrarGestionNoPagoEnNube(conn, opts) {
   const { prestamo_id: prestamoId, operador_id: operadorId, motivo, latitud = 0, longitud = 0 } = opts;
+  if (operadorId) await exigirUsuarioActivo(operadorId, conn);
   const cobradorRegistro = (await resolverCobradorAsignado(conn, prestamoId)) || operadorId;
   const id = uuidv4();
   const fecha = new Date().toISOString();

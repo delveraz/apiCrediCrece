@@ -80,6 +80,8 @@ async function pullChanges(req, res) {
   }
 }
 
+const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
+
 async function pushGestiones(req, res) {
   const { gestiones } = req.body;
   if (!Array.isArray(gestiones)) {
@@ -87,6 +89,13 @@ async function pushGestiones(req, res) {
   }
   if (!gestiones.length) {
     return res.json({ success: true, procesados: 0 });
+  }
+
+  try {
+    const cobId = req.operadorId || gestiones[0]?.cobrador_id;
+    await exigirUsuarioActivo(cobId);
+  } catch (e) {
+    return responderErrorUsuario(res, e);
   }
 
   const ids = gestiones.map((g) => g.id).filter(Boolean);

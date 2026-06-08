@@ -4,20 +4,35 @@ const { optimizarOrdenVisita } = require('./rutaOptima');
 /** Centro de Estelí, Nicaragua — punto de partida cobrador */
 const ESTELI_CENTRO = { lat: 13.0914, lng: -86.3534 };
 
-async function obtenerRutaIdOperador(operadorId) {
-  const rows = await query(
+async function runSql(conn, sql, params = []) {
+  if (conn) {
+    const [rows] = await conn.execute(sql, params);
+    return rows;
+  }
+  return query(sql, params);
+}
+
+async function obtenerRutaIdOperador(operadorId, conn = null) {
+  const rows = await runSql(
+    conn,
     `SELECT id FROM Rutas WHERE cobrador_id = ? AND activa = 1 AND deleted_at IS NULL LIMIT 1`,
     [operadorId]
   );
   return rows[0]?.id || null;
 }
 
-async function ensureRutaForOperador(operadorId, nombreOperador, descripcion = 'Ruta diaria automatica — Esteli') {
-  const existente = await obtenerRutaIdOperador(operadorId);
+async function ensureRutaForOperador(
+  operadorId,
+  nombreOperador,
+  descripcion = 'Ruta diaria automatica — Esteli',
+  conn = null
+) {
+  const existente = await obtenerRutaIdOperador(operadorId, conn);
   if (existente) return existente;
 
   const rutaId = `RUTA-${operadorId}`;
-  await query(
+  await runSql(
+    conn,
     `INSERT INTO Rutas (id, nombre, descripcion, cobrador_id, activa, is_synced)
      VALUES (?, ?, ?, ?, 1, 1)
      ON DUPLICATE KEY UPDATE cobrador_id = VALUES(cobrador_id), activa = 1, updated_at = NOW()`,
@@ -26,34 +41,37 @@ async function ensureRutaForOperador(operadorId, nombreOperador, descripcion = '
   return rutaId;
 }
 
-async function ensureRutaForCobrador(cobradorId, nombreCobrador) {
-  return ensureRutaForOperador(cobradorId, nombreCobrador);
+async function ensureRutaForCobrador(cobradorId, nombreCobrador, conn = null) {
+  return ensureRutaForOperador(cobradorId, nombreCobrador, 'Ruta diaria automatica — Esteli', conn);
 }
 
-async function quitarClienteDeRutaOperador(operadorId, clienteId) {
-  const rutaId = await obtenerRutaIdOperador(operadorId);
+async function quitarClienteDeRutaOperador(operadorId, clienteId, conn = null) {
+  const rutaId = await obtenerRutaIdOperador(operadorId, conn);
   if (!rutaId) return false;
-  await query(`DELETE FROM Ruta_Clientes WHERE ruta_id = ? AND cliente_id = ?`, [rutaId, clienteId]);
+  await runSql(conn, `DELETE FROM Ruta_Clientes WHERE ruta_id = ? AND cliente_id = ?`, [rutaId, clienteId]);
   return true;
 }
 
-async function listarIdsClientesEnRuta(operadorId) {
-  const rutaId = await obtenerRutaIdOperador(operadorId);
+async function listarIdsClientesEnRuta(operadorId, conn = null) {
+  const rutaId = await obtenerRutaIdOperador(operadorId, conn);
   if (!rutaId) return [];
-  const rows = await query(
+  const rows = await runSql(
+    conn,
     `SELECT cliente_id FROM Ruta_Clientes WHERE ruta_id = ? ORDER BY orden_visita`,
     [rutaId]
   );
   return rows.map((r) => r.cliente_id);
 }
 
-async function agregarClienteARuta(rutaId, clienteId) {
-  const [maxOrden] = await query(
+async function agregarClienteARuta(rutaId, clienteId, conn = null) {
+  const maxRows = await runSql(
+    conn,
     `SELECT COALESCE(MAX(orden_visita), 0) AS m FROM Ruta_Clientes WHERE ruta_id = ?`,
     [rutaId]
   );
-  const orden = (maxOrden?.m || 0) + 1;
-  await query(
+  const orden = (maxRows[0]?.m || 0) + 1;
+  await runSql(
+    conn,
     `INSERT INTO Ruta_Clientes (ruta_id, cliente_id, orden_visita)
      VALUES (?, ?, ?)
      ON DUPLICATE KEY UPDATE ruta_id = VALUES(ruta_id)`,
@@ -61,8 +79,9 @@ async function agregarClienteARuta(rutaId, clienteId) {
   );
 }
 
-async function optimizarOrdenRuta(rutaId, startLat = ESTELI_CENTRO.lat, startLng = ESTELI_CENTRO.lng) {
-  const clientes = await query(
+async function optimizarOrdenRuta(rutaId, startLat = ESTELI_CENTRO.lat, startLng = ESTELI_CENTRO.lng, conn = null) {
+  const clientes = await runSql(
+    conn,
     `SELECT c.id, c.latitud, c.longitud
      FROM Clientes c
      JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
@@ -76,7 +95,8 @@ async function optimizarOrdenRuta(rutaId, startLat = ESTELI_CENTRO.lat, startLng
 
   const cases = ordenados.map((c, i) => `WHEN '${c.id.replace(/'/g, "''")}' THEN ${i + 1}`).join(' ');
   const ids = ordenados.map((c) => `'${c.id.replace(/'/g, "''")}'`).join(',');
-  await query(
+  await runSql(
+    conn,
     `UPDATE Ruta_Clientes SET orden_visita = CASE cliente_id ${cases} END
      WHERE ruta_id = ? AND cliente_id IN (${ids})`,
     [rutaId]

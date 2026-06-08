@@ -399,8 +399,8 @@ async function pushSync(req, res) {
               'SELECT nombre_completo FROM Usuarios WHERE id = ? LIMIT 1',
               [cobId]
             );
-            const rutaId = await ensureRutaForCobrador(cobId, cobRow[0]?.nombre_completo);
-            await agregarClienteARuta(rutaId, clientId);
+            const rutaId = await ensureRutaForCobrador(cobId, cobRow[0]?.nombre_completo, conn);
+            await agregarClienteARuta(rutaId, clientId, conn);
           }
         }
         synced.clientes.push(c.id);

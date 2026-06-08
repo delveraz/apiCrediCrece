@@ -154,8 +154,8 @@ async function createCliente(req, res) {
           message: 'El cobrador asignado no existe. Elija un cobrador activo.',
         });
       }
-      const rutaId = await ensureRutaForCobrador(c.cobrador_id, cob[0].nombre_completo);
-      await agregarClienteARuta(rutaId, id);
+      const rutaId = await ensureRutaForCobrador(c.cobrador_id, cob[0].nombre_completo, conn);
+      await agregarClienteARuta(rutaId, id, conn);
     }
 
     await conn.commit();

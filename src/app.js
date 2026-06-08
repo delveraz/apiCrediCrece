@@ -57,6 +57,8 @@ app.post('/api/admin/contadores/:id/reset-password', admin.resetPasswordUsuario)
 app.post('/api/admin/usuarios/:id/reset-password', admin.resetPasswordUsuario);
 app.get('/api/admin/prestamos', admin.listPrestamosActivos);
 app.put('/api/admin/prestamos/:id/frecuencia', admin.updatePrestamoFrecuencia);
+app.patch('/api/admin/prestamos/:id/recibo-fisico', admin.patchReciboFisicoPrestamo);
+app.put('/api/admin/prestamos/:id/recibo-fisico', admin.patchReciboFisicoPrestamo);
 app.post('/api/admin/prestamos', admin.crearPrestamo);
 app.post('/api/admin/renovaciones', admin.renovacion);
 app.get('/api/admin/pagos', admin.listPagosDelDia);
@@ -73,6 +75,10 @@ app.put('/api/admin/rutas/:rutaId/cobrador', admin.asignarCobrador);
 app.post('/api/admin/rutas/:rutaId/clientes', admin.agregarClienteRuta);
 
 app.get('/api/admin/campo/agenda', adminCampo.getAgendaCampo);
+app.get('/api/admin/campo/mi-ruta', adminCampo.getMiRutaCampo);
+app.post('/api/admin/campo/mi-ruta/clientes', adminCampo.postClienteMiRutaCampo);
+app.delete('/api/admin/campo/mi-ruta/clientes/:clienteId', adminCampo.deleteClienteMiRutaCampo);
+app.put('/api/admin/campo/mi-ruta/optimizar', adminCampo.putOptimizarMiRutaCampo);
 app.get('/api/admin/campo/resumen-cobro/:prestamoId', adminCampo.getResumenCobroCampo);
 app.post('/api/admin/campo/pago', adminCampo.postPagoCampo);
 app.post('/api/admin/campo/gestion-no-pago', adminCampo.postGestionNoPagoCampo);

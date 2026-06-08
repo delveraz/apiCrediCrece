@@ -77,12 +77,10 @@ const generarAgendaDeCobro = (fechaInicioISO, plazoSemanas, diasDeCobro = ['LUNE
       const delta = (targetDay - fecha.getDay() + 7) % 7;
       fecha.setDate(fecha.getDate() + delta);
       if (Number.isNaN(fecha.getTime())) continue;
-      let fechaISO;
-      try {
-        fechaISO = fecha.toISOString().split('T')[0];
-      } catch {
-        continue;
-      }
+      const y = fecha.getFullYear();
+      const m = String(fecha.getMonth() + 1).padStart(2, '0');
+      const day = String(fecha.getDate()).padStart(2, '0');
+      const fechaISO = `${y}-${m}-${day}`;
       if (fechaISO === inicioStr) continue;
       agenda.push({
         fecha_programada: fechaISO,

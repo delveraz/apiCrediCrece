@@ -3,11 +3,18 @@ const { leerParametrosFinancieros } = require('../utils/parametrosFinancieros');
 const { nombreCompleto } = require('../utils/cliente');
 const { normalizarCedula, validarCedula } = require('../utils/cedulaNic');
 const { nextClienteId, esIdClienteOficial, initSecuenciaCliente } = require('../utils/clienteId');
-const { diaCobroHoy, incluyeDiaHoy, montoVisitaHoy } = require('../utils/diasCobro');
+const {
+  diaCobroHoy,
+  montoVisitaHoy,
+  debeSugerirCobroEnFecha,
+  esCuotaDiaDesembolso,
+  fechaCalendarioISO,
+} = require('../utils/diasCobro');
 const { upsertFiadorEnNube, verificarFiadorEnNube, repararFiadoresHistoricos } = require('../utils/fiadoresNube');
 const { insertMany } = require('../utils/bulkSql');
 const { buildRutaDiariaAdmin } = require('../utils/rutaDiariaAdmin');
 const { rangoDiaLocal } = require('../utils/fechasSql');
+const { ensureRutaForCobrador, agregarClienteARuta } = require('../utils/rutas');
 
 /**
  * Clientes asignados al cobrador + ruta del dia.
@@ -19,7 +26,7 @@ async function rutaDiaria(req, res) {
   }
   try {
     const { cobradorId } = req.params;
-    const hoy = new Date().toISOString().split('T')[0];
+    const hoy = fechaCalendarioISO();
     const { inicio: diaIni, fin: diaFin } = rangoDiaLocal(hoy);
 
     await initSecuenciaCliente(query);
@@ -188,8 +195,10 @@ async function rutaDiaria(req, res) {
 
     for (const c of clientes) {
       const p = prestamos.find((x) => x.cliente_id === c.id);
-      if (p && incluyeDiaHoy(p.dias_de_cobro)) {
-        const cuotaPend = cuotas.find((cc) => cc.prestamo_id === p.id);
+      if (p && debeSugerirCobroEnFecha(hoy, p)) {
+        const cuotaPend = cuotas.find(
+          (cc) => cc.prestamo_id === p.id && !esCuotaDiaDesembolso(cc, p)
+        );
         pushAgendaItem(c, p, cuotaPend);
       }
 
@@ -333,7 +342,14 @@ async function pushSync(req, res) {
         }
         c.cedula = valCed.cedula;
         const nc = nombreCompleto(c);
-        const cobId = c.cobrador_id || cobradorId || null;
+        let cobId = c.cobrador_id || cobradorId || null;
+        if (cobId) {
+          const [cobOk] = await conn.execute(
+            'SELECT id, nombre_completo FROM Usuarios WHERE id = ? AND activo = 1 LIMIT 1',
+            [cobId]
+          );
+          if (!cobOk.length) cobId = null;
+        }
 
         const [byCedula] = await conn.execute('SELECT id FROM Clientes WHERE cedula = ? LIMIT 1', [c.cedula]);
         const [byId] = c.id
@@ -379,17 +395,12 @@ async function pushSync(req, res) {
           idMapClientes[c.id] = clientId;
 
           if (cobId) {
-            const [rutas] = await conn.execute(
-              `SELECT id FROM Rutas WHERE cobrador_id = ? AND activa = 1 LIMIT 1`,
+            const [cobRow] = await conn.execute(
+              'SELECT nombre_completo FROM Usuarios WHERE id = ? LIMIT 1',
               [cobId]
             );
-            if (rutas.length) {
-              await conn.execute(
-                `INSERT INTO Ruta_Clientes (ruta_id, cliente_id, orden_visita)
-                 VALUES (?, ?, 999) ON DUPLICATE KEY UPDATE ruta_id = ruta_id`,
-                [rutas[0].id, clientId]
-              );
-            }
+            const rutaId = await ensureRutaForCobrador(cobId, cobRow[0]?.nombre_completo);
+            await agregarClienteARuta(rutaId, clientId);
           }
         }
         synced.clientes.push(c.id);
@@ -644,6 +655,20 @@ async function pushSync(req, res) {
 
     for (const pg of prestamo_garantias) {
       try {
+        const [prestamoOk] = await conn.execute('SELECT id FROM Prestamos WHERE id = ? LIMIT 1', [
+          pg.prestamo_id,
+        ]);
+        const [garantiaOk] = await conn.execute('SELECT id FROM Garantias WHERE id = ? LIMIT 1', [
+          pg.garantia_id,
+        ]);
+        if (!prestamoOk.length || !garantiaOk.length) {
+          errores.push({
+            tipo: 'prestamo_garantia',
+            id: `${pg.prestamo_id}-${pg.garantia_id}`,
+            message: 'Prestamo o garantia aun no estan en nube; se omitio el vinculo.',
+          });
+          continue;
+        }
         await conn.execute(
           `INSERT INTO Prestamo_Garantias (prestamo_id, garantia_id) VALUES (?, ?)
            ON DUPLICATE KEY UPDATE prestamo_id = prestamo_id`,

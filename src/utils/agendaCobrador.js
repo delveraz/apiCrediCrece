@@ -1,4 +1,10 @@
-const { incluyeDiaHoy, montoVisitaHoy, normalizarDia } = require('./diasCobro');
+const {
+  montoVisitaHoy,
+  normalizarDia,
+  debeSugerirCobroEnFecha,
+  esCuotaDiaDesembolso,
+  fechaCalendarioISO,
+} = require('./diasCobro');
 
 const MAPA = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
 
@@ -58,8 +64,10 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
 
   for (const c of clientes) {
     const p = prestamos.find((x) => x.cliente_id === c.id);
-    if (p && incluyeDiaEnFecha(hoy, p.dias_de_cobro)) {
-      const cuotaPend = cuotas.find((cc) => cc.prestamo_id === p.id);
+    if (p && debeSugerirCobroEnFecha(hoy, p)) {
+      const cuotaPend = cuotas.find(
+        (cc) => cc.prestamo_id === p.id && !esCuotaDiaDesembolso(cc, p)
+      );
       pushAgendaItem(c, p, cuotaPend);
     }
 
@@ -110,7 +118,7 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
 }
 
 async function cargarDatosCobrador(query, cobradorId, fechaISO) {
-  const hoy = fechaISO || new Date().toISOString().split('T')[0];
+  const hoy = fechaISO || fechaCalendarioISO();
 
   const clientes = await query(
     `SELECT DISTINCT c.*, rc.ruta_id, rc.orden_visita
@@ -188,7 +196,7 @@ async function cargarDatosCobrador(query, cobradorId, fechaISO) {
  * Carga datos de todos los cobradores en pocas consultas (cumplimiento admin).
  */
 async function cargarDatosTodosCobradores(query, cobradorIds, fechaISO) {
-  const hoy = fechaISO || new Date().toISOString().split('T')[0];
+  const hoy = fechaISO || fechaCalendarioISO();
   if (!cobradorIds.length) {
     return { hoy, clientes: [], prestamos: [], cuotas: [], pagos_hoy: [], gestiones_hoy: [], cierres: [] };
   }

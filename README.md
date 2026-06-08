@@ -53,6 +53,27 @@ npm run dev
 npm run fix-cedulas      # Normaliza cédulas sin guión
 npm run ensure-indexes   # Índices de rendimiento
 npm run fix-schema       # Parches de esquema
+npm run vistas-reporte   # Vistas SQL legibles (Excel / TiDB console)
+```
+
+### Vistas para reportes (sin la app)
+
+Tras `npm run vistas-reporte` puede consultar en TiDB Cloud o exportar a Excel:
+
+| Vista | Contenido |
+|-------|-----------|
+| `v_giros_financieros` | Todos los movimientos: desembolsos, cobros, renovaciones, gestiones |
+| `v_operaciones_app` | Alias de la vista anterior |
+| `v_cartera_activa` | Préstamos activos con saldo y cuotas pendientes |
+| `v_prestamos` | Detalle de préstamos |
+| `v_pagos` | Cobros registrados |
+| `v_clientes` | Clientes con cobrador asignado |
+| `v_rutas_clientes` | Orden de visita por ruta (cobradores y admin campo) |
+
+Ejemplo:
+
+```sql
+SELECT * FROM v_giros_financieros WHERE fecha >= '2025-01-01' ORDER BY fecha_hora;
 ```
 
 ## Vercel (producción)

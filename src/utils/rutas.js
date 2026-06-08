@@ -4,21 +4,47 @@ const { optimizarOrdenVisita } = require('./rutaOptima');
 /** Centro de Estelí, Nicaragua — punto de partida cobrador */
 const ESTELI_CENTRO = { lat: 13.0914, lng: -86.3534 };
 
-async function ensureRutaForCobrador(cobradorId, nombreCobrador) {
+async function obtenerRutaIdOperador(operadorId) {
   const rows = await query(
     `SELECT id FROM Rutas WHERE cobrador_id = ? AND activa = 1 AND deleted_at IS NULL LIMIT 1`,
-    [cobradorId]
+    [operadorId]
   );
-  if (rows[0]?.id) return rows[0].id;
+  return rows[0]?.id || null;
+}
 
-  const rutaId = `RUTA-${cobradorId}`;
+async function ensureRutaForOperador(operadorId, nombreOperador, descripcion = 'Ruta diaria automatica — Esteli') {
+  const existente = await obtenerRutaIdOperador(operadorId);
+  if (existente) return existente;
+
+  const rutaId = `RUTA-${operadorId}`;
   await query(
     `INSERT INTO Rutas (id, nombre, descripcion, cobrador_id, activa, is_synced)
      VALUES (?, ?, ?, ?, 1, 1)
      ON DUPLICATE KEY UPDATE cobrador_id = VALUES(cobrador_id), activa = 1, updated_at = NOW()`,
-    [rutaId, `Ruta ${nombreCobrador || cobradorId}`, 'Ruta diaria automatica — Esteli', cobradorId]
+    [rutaId, `Ruta ${nombreOperador || operadorId}`, descripcion, operadorId]
   );
   return rutaId;
+}
+
+async function ensureRutaForCobrador(cobradorId, nombreCobrador) {
+  return ensureRutaForOperador(cobradorId, nombreCobrador);
+}
+
+async function quitarClienteDeRutaOperador(operadorId, clienteId) {
+  const rutaId = await obtenerRutaIdOperador(operadorId);
+  if (!rutaId) return false;
+  await query(`DELETE FROM Ruta_Clientes WHERE ruta_id = ? AND cliente_id = ?`, [rutaId, clienteId]);
+  return true;
+}
+
+async function listarIdsClientesEnRuta(operadorId) {
+  const rutaId = await obtenerRutaIdOperador(operadorId);
+  if (!rutaId) return [];
+  const rows = await query(
+    `SELECT cliente_id FROM Ruta_Clientes WHERE ruta_id = ? ORDER BY orden_visita`,
+    [rutaId]
+  );
+  return rows.map((r) => r.cliente_id);
 }
 
 async function agregarClienteARuta(rutaId, clienteId) {
@@ -58,23 +84,25 @@ async function optimizarOrdenRuta(rutaId, startLat = ESTELI_CENTRO.lat, startLng
 }
 
 async function sincronizarRutasCobradores() {
-  const cobradores = await query(
-    `SELECT u.id, u.nombre_completo FROM Usuarios u
+  const operadores = await query(
+    `SELECT u.id, u.nombre_completo, r.nombre AS rol FROM Usuarios u
      JOIN Roles r ON u.rol_id = r.id
-     WHERE r.nombre = 'COBRADOR' AND u.activo = 1`
+     WHERE r.nombre IN ('COBRADOR', 'ADMIN') AND u.activo = 1 AND u.deleted_at IS NULL`
   );
   let creadas = 0;
-  for (const c of cobradores) {
+  for (const c of operadores) {
     const antes = await query(
       `SELECT id FROM Rutas WHERE cobrador_id = ? AND activa = 1 LIMIT 1`,
       [c.id]
     );
     if (!antes.length) {
-      await ensureRutaForCobrador(c.id, c.nombre_completo);
+      const desc =
+        c.rol === 'ADMIN' ? 'Ruta campo administrador — Esteli' : 'Ruta diaria automatica — Esteli';
+      await ensureRutaForOperador(c.id, c.nombre_completo, desc);
       creadas++;
     }
   }
-  return { total: cobradores.length, creadas };
+  return { total: operadores.length, creadas };
 }
 
 async function vincularClientesCobradorARuta(cobradorId) {
@@ -92,7 +120,11 @@ async function vincularClientesCobradorARuta(cobradorId) {
 
 module.exports = {
   ESTELI_CENTRO,
+  ensureRutaForOperador,
   ensureRutaForCobrador,
+  obtenerRutaIdOperador,
+  quitarClienteDeRutaOperador,
+  listarIdsClientesEnRuta,
   agregarClienteARuta,
   optimizarOrdenRuta,
   sincronizarRutasCobradores,

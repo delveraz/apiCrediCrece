@@ -1,33 +1,66 @@
 const { query } = require('../config/db');
 const { leerParametrosFinancieros } = require('../utils/parametrosFinancieros');
 const { initSecuenciaCliente } = require('../utils/clienteId');
-const { diaCobroHoy, incluyeDiaHoy, montoVisitaHoy } = require('../utils/diasCobro');
+const {
+  diaCobroHoy,
+  montoVisitaHoy,
+  debeSugerirCobroEnFecha,
+  esCuotaDiaDesembolso,
+  fechaCalendarioISO,
+} = require('./diasCobro');
 const { rangoDiaLocal } = require('../utils/fechasSql');
 
 /**
- * Ruta del día para administrador: todos los clientes con crédito activo (día de cobro de hoy).
+ * Ruta del día para administrador.
+ * @param {{ adminId?: string, alcance?: 'todos'|'ruta' }} opciones
+ *   - alcance `ruta`: solo clientes en la ruta campo del admin (requiere adminId)
+ *   - alcance `todos`: toda la cartera activa con cobro hoy (default)
  */
-async function loadAgendaAdminHoy() {
-    const hoy = new Date().toISOString().split('T')[0];
+async function loadAgendaAdminHoy(opciones = {}) {
+    const { adminId, alcance = 'todos' } = opciones;
+    const soloRuta = alcance === 'ruta' && adminId;
+    const hoy = fechaCalendarioISO();
     const { inicio: diaIni, fin: diaFin } = rangoDiaLocal(hoy);
     await initSecuenciaCliente(query);
     const secRows = await query(`SELECT valor FROM Parametros_Globales WHERE clave = 'SEC_CLIENTE'`);
     const secuencia = secRows[0]?.valor || '0';
 
-    const clientes = await query(
-      `SELECT DISTINCT c.*,
-              COALESCE(rc.orden_visita, 999) AS orden_visita,
-              rc.ruta_id,
-              u.nombre_completo AS cobrador_asignado,
-              c.cobrador_id AS cobrador_asignado_id
-       FROM Clientes c
-       INNER JOIN Prestamos p ON p.cliente_id = c.id AND p.estado = 'Activo' AND p.deleted_at IS NULL
-       LEFT JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
-       LEFT JOIN Rutas r ON rc.ruta_id = r.id AND r.activa = 1 AND r.deleted_at IS NULL
-       LEFT JOIN Usuarios u ON c.cobrador_id = u.id AND u.deleted_at IS NULL
-       WHERE c.deleted_at IS NULL
-       ORDER BY c.cobrador_id, orden_visita ASC, c.nombre_completo ASC`
-    );
+    let clientes;
+    if (soloRuta) {
+      clientes = await query(
+        `SELECT DISTINCT c.*,
+                COALESCE(rc.orden_visita, 999) AS orden_visita,
+                rc.ruta_id,
+                u.nombre_completo AS cobrador_asignado,
+                c.cobrador_id AS cobrador_asignado_id
+         FROM Clientes c
+         INNER JOIN Prestamos p ON p.cliente_id = c.id AND p.estado = 'Activo' AND p.deleted_at IS NULL
+         INNER JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
+         INNER JOIN Rutas r ON rc.ruta_id = r.id AND r.cobrador_id = ? AND r.activa = 1 AND r.deleted_at IS NULL
+         LEFT JOIN Usuarios u ON c.cobrador_id = u.id AND u.deleted_at IS NULL
+         WHERE c.deleted_at IS NULL
+         ORDER BY orden_visita ASC, c.nombre_completo ASC`,
+        [adminId]
+      );
+    } else {
+      clientes = await query(
+        `SELECT DISTINCT c.*,
+                COALESCE(rc_admin.orden_visita, rc.orden_visita, 999) AS orden_visita,
+                COALESCE(rc_admin.ruta_id, rc.ruta_id) AS ruta_id,
+                u.nombre_completo AS cobrador_asignado,
+                c.cobrador_id AS cobrador_asignado_id
+         FROM Clientes c
+         INNER JOIN Prestamos p ON p.cliente_id = c.id AND p.estado = 'Activo' AND p.deleted_at IS NULL
+         LEFT JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
+         LEFT JOIN Rutas r ON rc.ruta_id = r.id AND r.activa = 1 AND r.deleted_at IS NULL
+         LEFT JOIN Ruta_Clientes rc_admin ON c.id = rc_admin.cliente_id
+           AND rc_admin.ruta_id = CONCAT('RUTA-', ?)
+         LEFT JOIN Usuarios u ON c.cobrador_id = u.id AND u.deleted_at IS NULL
+         WHERE c.deleted_at IS NULL
+         ORDER BY orden_visita ASC, c.nombre_completo ASC`,
+        [adminId || '']
+      );
+    }
 
     const rutas = await query(
       `SELECT * FROM Rutas WHERE activa = 1 AND deleted_at IS NULL ORDER BY cobrador_id`
@@ -91,9 +124,11 @@ async function loadAgendaAdminHoy() {
     if (clienteIds.length) {
       const ph2 = clienteIds.map(() => '?').join(',');
       pagos_hoy = await query(
-        `SELECT pg.*, p.cliente_id
+        `SELECT pg.*, p.cliente_id, p.fecha_desembolso, p.plazo_semanas, p.dias_de_cobro,
+                p.saldo_pendiente, c.nombre_completo, c.telefono
          FROM Pagos pg
          INNER JOIN Prestamos p ON pg.prestamo_id = p.id
+         INNER JOIN Clientes c ON p.cliente_id = c.id
          WHERE pg.fecha_pago >= ? AND pg.fecha_pago < ?
            AND pg.deleted_at IS NULL
            AND p.cliente_id IN (${ph2})`,
@@ -153,6 +188,8 @@ async function loadAgendaAdminHoy() {
         saldo_pendiente: p.saldo_pendiente,
         cuota_semanal_base: p.cuota_semanal_base,
         dias_de_cobro: p.dias_de_cobro,
+        fecha_desembolso: p.fecha_desembolso,
+        plazo_semanas: p.plazo_semanas,
         monto_total_pagar: p.monto_total_pagar,
         estado_prestamo: p.estado,
         dia_cobro: hoyDia,
@@ -169,8 +206,10 @@ async function loadAgendaAdminHoy() {
 
     for (const c of clientes) {
       const p = prestamos.find((x) => x.cliente_id === c.id);
-      if (p && incluyeDiaHoy(p.dias_de_cobro)) {
-        const cuotaPend = cuotas.find((cc) => cc.prestamo_id === p.id);
+      if (p && debeSugerirCobroEnFecha(hoy, p)) {
+        const cuotaPend = cuotas.find(
+          (cc) => cc.prestamo_id === p.id && !esCuotaDiaDesembolso(cc, p)
+        );
         pushAgendaItem(c, p, cuotaPend);
       }
       for (const pg of pagos_hoy.filter((x) => x.cliente_id === c.id)) {
@@ -202,6 +241,8 @@ async function loadAgendaAdminHoy() {
       secuencia,
       dia_cobro: hoyDia,
       vista_admin: true,
+      alcance: soloRuta ? 'ruta' : 'todos',
+      admin_id: adminId || null,
       parametros_financieros: await leerParametrosFinancieros(query),
       data: { rutas, ruta_clientes, clientes, prestamos, cuotas, fiadores, agenda, pagos_hoy, gestiones_hoy },
     };
@@ -209,7 +250,9 @@ async function loadAgendaAdminHoy() {
 
 async function buildRutaDiariaAdmin(req, res) {
   try {
-    const payload = await loadAgendaAdminHoy();
+    const adminId = req.query.admin_id || req.params.cobradorId || null;
+    const alcance = req.query.alcance === 'ruta' ? 'ruta' : 'todos';
+    const payload = await loadAgendaAdminHoy({ adminId, alcance });
     return res.json({ success: true, ...payload });
   } catch (e) {
     return res.status(500).json({ success: false, message: e.message });

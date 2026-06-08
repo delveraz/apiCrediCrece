@@ -142,6 +142,22 @@ async function createCliente(req, res) {
         c.latitud, c.longitud, c.cobrador_id,
       ]
     );
+    if (c.cobrador_id) {
+      const [cob] = await conn.execute(
+        'SELECT id, nombre_completo FROM Usuarios WHERE id = ? AND activo = 1 LIMIT 1',
+        [c.cobrador_id]
+      );
+      if (!cob.length) {
+        await conn.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'El cobrador asignado no existe. Elija un cobrador activo.',
+        });
+      }
+      const rutaId = await ensureRutaForCobrador(c.cobrador_id, cob[0].nombre_completo);
+      await agregarClienteARuta(rutaId, id);
+    }
+
     await conn.commit();
     return res.json({ success: true, id, secuencia: id });
   } catch (e) {
@@ -232,8 +248,16 @@ async function getSecuenciaCliente(req, res) {
 async function listPrestamosActivos(req, res) {
   try {
     const rows = await query(
-      `SELECT p.*, c.nombre_completo, c.cedula, c.telefono FROM Prestamos p
+      `SELECT p.*, c.nombre_completo, c.cedula, c.telefono,
+              ur.nombre_completo AS cobrador_registro_nombre,
+              ue.nombre_completo AS cobrador_entrega_nombre,
+              uop.nombre_completo AS cobrador_opero_nombre
+       FROM Prestamos p
        JOIN Clientes c ON p.cliente_id = c.id
+       LEFT JOIN Usuarios ur ON p.cobrador_registro_id = ur.id
+       LEFT JOIN Usuarios ue ON p.cobrador_entrega_id = ue.id
+       LEFT JOIN Renovaciones_Log r ON r.prestamo_nuevo_id = p.id
+       LEFT JOIN Usuarios uop ON r.cobrador_opero_id = uop.id
        WHERE p.estado = 'Activo' AND p.deleted_at IS NULL
        ORDER BY c.nombre_completo`
     );
@@ -351,6 +375,27 @@ async function setParametrosFinancieros(req, res) {
 
     const data = await leerParametrosFinancieros(query);
     return res.json({ success: true, data });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+}
+
+async function patchReciboFisicoPrestamo(req, res) {
+  try {
+    const { id } = req.params;
+    const numero = String(req.body.numero_recibo_fisico ?? '').trim() || null;
+    const [row] = await query(
+      `SELECT id FROM Prestamos WHERE id = ? AND deleted_at IS NULL LIMIT 1`,
+      [id]
+    );
+    if (!row) {
+      return res.status(404).json({ success: false, message: 'Préstamo no encontrado' });
+    }
+    await query(
+      `UPDATE Prestamos SET numero_recibo_fisico = ?, is_synced = 1, updated_at = NOW() WHERE id = ?`,
+      [numero, id]
+    );
+    return res.json({ success: true, numero_recibo_fisico: numero });
   } catch (e) {
     return res.status(500).json({ success: false, message: e.message });
   }
@@ -632,6 +677,7 @@ async function crearPrestamo(req, res) {
   const conn = await getConnection();
   try {
     const p = req.body;
+    const operadorId = p.operador?.id || p.cobrador_registro_id || null;
     const id = p.id || uuidv4();
     await conn.beginTransaction();
 
@@ -659,8 +705,9 @@ async function crearPrestamo(req, res) {
         id, cliente_id, fiador_id,
         monto_desembolsado, plazo_semanas, tasa_interes_aplicada,
         cuota_semanal_base, monto_total_pagar, saldo_pendiente, frecuencia_semana,
-        dias_de_cobro, periodicidad, estado, fecha_desembolso, is_synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SEMANAL', 'Activo', ?, 1)`,
+        dias_de_cobro, periodicidad, estado, fecha_desembolso,
+        cobrador_registro_id, cobrador_entrega_id, is_synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SEMANAL', 'Activo', ?, ?, ?, 1)`,
       [
         id,
         p.cliente_id,
@@ -674,6 +721,8 @@ async function crearPrestamo(req, res) {
         p.frecuencia_semana || 1,
         typeof p.dias_de_cobro === 'string' ? p.dias_de_cobro : JSON.stringify(p.dias_de_cobro || ['LUNES']),
         p.fecha_desembolso,
+        operadorId,
+        p.cobrador_entrega_id || null,
       ]
     );
     for (const cuota of p.cuotas || []) {
@@ -923,34 +972,43 @@ async function listSolicitudesCorreccion(req, res) {
 async function renovacion(req, res) {
   const conn = await getConnection();
   try {
-    const { prestamo_anterior_id, nuevo_prestamo, log } = req.body;
+    const { prestamo_anterior_id, nuevo_prestamo, log, operador } = req.body;
+    const operadorId = operador?.id || nuevo_prestamo?.cobrador_registro_id || null;
+    const operadorNombre = operador?.nombre || null;
     await conn.beginTransaction();
     await conn.execute(
       `UPDATE Prestamos SET estado = 'Cerrado por Renovación', saldo_pendiente = 0, updated_at = NOW() WHERE id = ?`,
       [prestamo_anterior_id]
     );
     const np = nuevo_prestamo;
+    const entregaId = np.cobrador_entrega_id || operadorId || null;
     await conn.execute(
       `INSERT INTO Prestamos (
         id, cliente_id, monto_desembolsado, plazo_semanas, tasa_interes_aplicada,
         cuota_semanal_base, monto_total_pagar, saldo_pendiente, dias_de_cobro,
-        renovacion_previa_id, estado, fecha_desembolso, is_synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', ?, 1)`,
+        renovacion_previa_id, estado, fecha_desembolso,
+        cobrador_registro_id, cobrador_entrega_id, is_synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Activo', ?, ?, ?, 1)`,
       [
         np.id, np.cliente_id, np.monto_desembolsado, np.plazo_semanas, np.tasa_interes_aplicada,
         np.cuota_semanal_base, np.monto_total_pagar, np.saldo_pendiente,
         typeof np.dias_de_cobro === 'string' ? np.dias_de_cobro : JSON.stringify(np.dias_de_cobro || ['LUNES']),
         prestamo_anterior_id, np.fecha_desembolso,
+        operadorId,
+        entregaId,
       ]
     );
     await conn.execute(
       `INSERT INTO Renovaciones_Log (
         id, prestamo_anterior_id, prestamo_nuevo_id, saldo_pendiente_anterior, nuevo_desembolso,
-        base_nominal, tasa_aplicada, monto_total_a_pagar, cuota_semanal, fecha_renovacion, is_synced
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), 1)`,
+        base_nominal, tasa_aplicada, monto_total_a_pagar, cuota_semanal, fecha_renovacion,
+        cobrador_opero_id, cobrador_entrega_id, is_synced
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 1)`,
       [
         log.id || uuidv4(), prestamo_anterior_id, np.id, log.saldo_pendiente_anterior,
         log.nuevo_desembolso, log.base_nominal, log.tasa_aplicada, log.monto_total_a_pagar, log.cuota_semanal,
+        operadorId,
+        log.cobrador_entrega_id || entregaId,
       ]
     );
     for (const c of np.cuotas || []) {
@@ -968,6 +1026,7 @@ async function renovacion(req, res) {
     return res.json({
       success: true,
       id: np.id,
+      operador_nombre: operadorNombre,
       cliente_whatsapp: datosWhatsAppCliente(cliRows[0]),
     });
   } catch (e) {
@@ -1232,7 +1291,8 @@ async function resetPasswordUsuario(req, res) {
 
 async function getCumplimientoRuta(req, res) {
   try {
-    const fecha = req.query.fecha || new Date().toISOString().split('T')[0];
+    const { fechaCalendarioISO } = require('../utils/diasCobro');
+    const fecha = req.query.fecha || fechaCalendarioISO();
     const cobradorId = req.query.cobrador_id || null;
     const incluirVisitas = req.query.detalle === '1' || !!cobradorId;
 
@@ -1354,6 +1414,7 @@ module.exports = {
   asignarClienteCobrador,
   getSecuenciaCliente,
   listPrestamosActivos,
+  patchReciboFisicoPrestamo,
   updatePrestamoFrecuencia,
   listRutas,
   listCobradores,

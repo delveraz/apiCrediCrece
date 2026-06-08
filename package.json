@@ -16,7 +16,8 @@
     "repair-fiadores": "node src/scripts/repair-fiadores.js",
     "fix-cedulas": "node src/scripts/fix-cedulas.js",
     "ensure-indexes": "node -e \"require('./src/utils/ensureIndexes').ensurePerformanceIndexes().then(n=>console.log('indexes',n)).catch(e=>{console.error(e);process.exit(1)})\"",
-    "seed-demo": "node src/scripts/seed-demo-esteli.js"
+    "seed-demo": "node src/scripts/seed-demo-esteli.js",
+    "vistas-reporte": "node src/scripts/create-views.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.2",

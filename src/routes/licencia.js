@@ -1,6 +1,8 @@
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../config/db');
+const { obtenerIpCliente } = require('../utils/clientIp');
+const { geolocalizarIp } = require('../utils/geoip');
 const { enviarCodigoActivacion, smtpConfigurado, ADMIN_EMAIL } = require('../utils/licenciaEmail');
 const { firmarToken, verificarToken } = require('../utils/licenciaToken');
 const { ensureLicenciaTables } = require('../utils/ensureLicenciaTables');
@@ -29,11 +31,34 @@ async function solicitudesRecientes(deviceId) {
   return Number(row?.n || 0);
 }
 
+function txtCampo(v, max) {
+  if (v === null || v === undefined) return null;
+  const s = String(v).trim();
+  return s ? s.slice(0, max) : null;
+}
+
 async function solicitarCodigo(req, res) {
   try {
     await ensureLicenciaTables();
     const deviceId = String(req.body.deviceId || '').trim();
-    const etiqueta = String(req.body.etiqueta || '').trim().slice(0, 120) || null;
+    const etiqueta = txtCampo(req.body.etiqueta, 120);
+    const solicitudIp = obtenerIpCliente(req);
+    const deviceMarca = txtCampo(req.body.deviceMarca, 60);
+    const deviceModelo = txtCampo(req.body.deviceModelo, 80);
+    const deviceOs = txtCampo(req.body.deviceOs, 40);
+    const appVersion = txtCampo(req.body.appVersion, 40);
+    const geo = solicitudIp ? await geolocalizarIp(solicitudIp) : null;
+    const metaDispositivo = {
+      solicitudIp,
+      deviceMarca,
+      deviceModelo,
+      deviceOs,
+      appVersion,
+      geoCiudad: geo?.ciudad || null,
+      geoRegion: geo?.region || null,
+      geoPais: geo?.pais || null,
+      geoIsp: geo?.isp || null,
+    };
 
     if (!deviceId || deviceId.length < 8) {
       return res.status(400).json({ success: false, message: 'Identificador de dispositivo inválido.' });
@@ -70,12 +95,29 @@ async function solicitarCodigo(req, res) {
     const id = uuidv4();
 
     await query(
-      `INSERT INTO Licencias_Codigos (id, device_id, codigo_hash, etiqueta, expires_at)
-       VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? HOUR))`,
-      [id, deviceId, codigoHash, etiqueta, CODIGO_EXPIRA_HORAS]
+      `INSERT INTO Licencias_Codigos
+         (id, device_id, codigo_hash, etiqueta, solicitud_ip, device_marca, device_modelo, device_os, app_version,
+          geo_ciudad, geo_region, geo_pais, geo_isp, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? HOUR))`,
+      [
+        id,
+        deviceId,
+        codigoHash,
+        etiqueta,
+        solicitudIp,
+        deviceMarca,
+        deviceModelo,
+        deviceOs,
+        appVersion,
+        metaDispositivo.geoCiudad,
+        metaDispositivo.geoRegion,
+        metaDispositivo.geoPais,
+        metaDispositivo.geoIsp,
+        CODIGO_EXPIRA_HORAS,
+      ]
     );
 
-    await enviarCodigoActivacion({ codigo, deviceId, etiqueta });
+    await enviarCodigoActivacion({ codigo, deviceId, etiqueta, metaDispositivo });
 
     return res.json({
       success: true,

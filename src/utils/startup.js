@@ -75,6 +75,15 @@ async function migrarTablasSync() {
       activado_at DATETIME NOT NULL,
       KEY idx_lic_act_fecha (activado_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
+    'ALTER TABLE Licencias_Codigos ADD COLUMN solicitud_ip VARCHAR(45) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN device_marca VARCHAR(60) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN device_modelo VARCHAR(80) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN device_os VARCHAR(40) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN app_version VARCHAR(40) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN geo_ciudad VARCHAR(80) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN geo_region VARCHAR(80) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN geo_pais VARCHAR(80) DEFAULT NULL',
+    'ALTER TABLE Licencias_Codigos ADD COLUMN geo_isp VARCHAR(80) DEFAULT NULL',
   ];
   for (const sql of alters) {
     try {

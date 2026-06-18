@@ -14,14 +14,57 @@ function resendConfigurado() {
   return Boolean(process.env.RESEND_API_KEY?.trim());
 }
 
-async function enviarPorResend({ codigo, deviceId, etiqueta }) {
+function resumenDispositivo(meta = {}) {
+  const partes = [];
+  if (meta.deviceMarca || meta.deviceModelo) {
+    partes.push([meta.deviceMarca, meta.deviceModelo].filter(Boolean).join(' '));
+  }
+  if (meta.deviceOs) partes.push(meta.deviceOs);
+  if (meta.appVersion) partes.push(`App ${meta.appVersion}`);
+  return partes.length ? partes.join(' · ') : null;
+}
+
+function resumenUbicacion(meta = {}) {
+  const partes = [];
+  if (meta.geoCiudad) partes.push(meta.geoCiudad);
+  if (meta.geoRegion && meta.geoRegion !== meta.geoCiudad) partes.push(meta.geoRegion);
+  if (meta.geoPais) partes.push(meta.geoPais);
+  return partes.length ? partes.join(', ') : null;
+}
+
+function bloqueMetaHtml(meta = {}) {
+  const lineas = [];
+  const equipo = resumenDispositivo(meta);
+  if (equipo) lineas.push(`<p><strong>Equipo:</strong> ${equipo}</p>`);
+  if (meta.solicitudIp) lineas.push(`<p><strong>IP aprox.:</strong> ${meta.solicitudIp}</p>`);
+  const ubicacion = resumenUbicacion(meta);
+  if (ubicacion) lineas.push(`<p><strong>Ubicación aprox.:</strong> ${ubicacion}</p>`);
+  if (meta.geoIsp) lineas.push(`<p><strong>Proveedor:</strong> ${meta.geoIsp}</p>`);
+  return lineas.join('\n');
+}
+
+function bloqueMetaTexto(meta = {}) {
+  const lineas = [];
+  const equipo = resumenDispositivo(meta);
+  if (equipo) lineas.push(`Equipo: ${equipo}`);
+  if (meta.solicitudIp) lineas.push(`IP aprox.: ${meta.solicitudIp}`);
+  const ubicacion = resumenUbicacion(meta);
+  if (ubicacion) lineas.push(`Ubicación aprox.: ${ubicacion}`);
+  if (meta.geoIsp) lineas.push(`Proveedor: ${meta.geoIsp}`);
+  return lineas.length ? `\n${lineas.join('\n')}` : '';
+}
+
+async function enviarPorResend({ codigo, deviceId, etiqueta, metaDispositivo = {} }) {
   const dispositivo = etiqueta || deviceId;
   const from = process.env.RESEND_FROM || 'Credi Crece <onboarding@resend.dev>';
+  const metaHtml = bloqueMetaHtml(metaDispositivo);
+  const metaTexto = bloqueMetaTexto(metaDispositivo);
   const html = `
     <h2>Credi Crece — código de activación</h2>
     <p><strong>Código:</strong> <span style="font-size:24px;letter-spacing:4px">${codigo}</span></p>
     <p><strong>Dispositivo:</strong> ${dispositivo}</p>
     <p><strong>ID:</strong> ${deviceId}</p>
+    ${metaHtml}
     <p>Válido 48 horas. Comparta este código con el cliente.</p>
   `;
   const res = await fetch('https://api.resend.com/emails', {
@@ -34,7 +77,7 @@ async function enviarPorResend({ codigo, deviceId, etiqueta }) {
       from,
       to: [ADMIN_EMAIL],
       subject: `Credi Crece — activación ${codigo}`,
-      text: `Código: ${codigo}\nDispositivo: ${dispositivo}\nID: ${deviceId}`,
+      text: `Código: ${codigo}\nDispositivo: ${dispositivo}\nID: ${deviceId}${metaTexto}`,
       html,
     }),
   });
@@ -47,9 +90,9 @@ async function enviarPorResend({ codigo, deviceId, etiqueta }) {
   return { enviadoA: ADMIN_EMAIL };
 }
 
-async function enviarCodigoActivacion({ codigo, deviceId, etiqueta }) {
+async function enviarCodigoActivacion({ codigo, deviceId, etiqueta, metaDispositivo = {} }) {
   if (resendConfigurado()) {
-    return enviarPorResend({ codigo, deviceId, etiqueta });
+    return enviarPorResend({ codigo, deviceId, etiqueta, metaDispositivo });
   }
 
   if (!smtpConfigurado()) {
@@ -71,12 +114,15 @@ async function enviarCodigoActivacion({ codigo, deviceId, etiqueta }) {
   });
 
   const dispositivo = etiqueta || deviceId;
+  const metaHtml = bloqueMetaHtml(metaDispositivo);
+  const metaTexto = bloqueMetaTexto(metaDispositivo);
   const html = `
     <h2>Credi Crece — código de activación</h2>
     <p>Se solicitó activar la app en un dispositivo.</p>
     <p><strong>Código:</strong> <span style="font-size:24px;letter-spacing:4px">${codigo}</span></p>
     <p><strong>Dispositivo:</strong> ${dispositivo}</p>
     <p><strong>ID:</strong> ${deviceId}</p>
+    ${metaHtml}
     <p>Comparta este código con el cliente. Válido 48 horas.</p>
   `;
 
@@ -84,7 +130,7 @@ async function enviarCodigoActivacion({ codigo, deviceId, etiqueta }) {
     from: process.env.SMTP_FROM || process.env.SMTP_USER,
     to: ADMIN_EMAIL,
     subject: `Credi Crece — activación ${codigo}`,
-    text: `Código de activación: ${codigo}\nDispositivo: ${dispositivo}\nID: ${deviceId}`,
+    text: `Código de activación: ${codigo}\nDispositivo: ${dispositivo}\nID: ${deviceId}${metaTexto}`,
     html,
   });
 

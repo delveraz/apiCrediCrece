@@ -67,6 +67,7 @@ app.put('/api/admin/prestamos/:id/recibo-fisico', admin.patchReciboFisicoPrestam
 app.post('/api/admin/prestamos', admin.crearPrestamo);
 app.post('/api/admin/renovaciones', admin.renovacion);
 app.get('/api/admin/pagos', admin.listPagosDelDia);
+app.get('/api/admin/pagos/detalle', admin.listPagosDetalleDia);
 app.put('/api/admin/pagos/:id', admin.updatePago);
 app.get('/api/admin/solicitudes-correccion', admin.listSolicitudesCorreccion);
 app.get('/api/admin/rutas', admin.listRutas);

@@ -34,15 +34,22 @@ function esVisitaCobrada(estado) {
   return estado === 'cobrado' || estado === 'cobrado_admin';
 }
 
-function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gestiones_hoy) {
+function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gestiones_hoy, cobradorId = null) {
+  const pagosRuta = cobradorId
+    ? pagos_hoy.filter((pg) => pg.cobrador_id === cobradorId)
+    : pagos_hoy;
+  const gestionesRuta = cobradorId
+    ? gestiones_hoy.filter((g) => g.cobrador_id === cobradorId)
+    : gestiones_hoy;
+
   const agenda = [];
-  const pagoPorPrestamo = new Map(pagos_hoy.map((pg) => [pg.prestamo_id, pg]));
-  const gestionPorPrestamo = new Map(gestiones_hoy.map((g) => [g.prestamo_id, g]));
+  const pagoPorPrestamo = new Map(pagosRuta.map((pg) => [pg.prestamo_id, pg]));
+  const gestionPorPrestamo = new Map(gestionesRuta.map((g) => [g.prestamo_id, g]));
   const prestamosEnAgenda = new Set();
   const prestamoPorId = new Map(prestamos.map((p) => [p.id, p]));
 
   const prestamoIdsPagos = [
-    ...new Set(pagos_hoy.map((pg) => pg.prestamo_id).filter((id) => id && !prestamoPorId.has(id))),
+    ...new Set(pagosRuta.map((pg) => pg.prestamo_id).filter((id) => id && !prestamoPorId.has(id))),
   ];
 
   const pushAgendaItem = (c, p, cuotaPend, extra = {}) => {
@@ -88,7 +95,7 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
       pushAgendaItem(c, p, cuotaPend);
     }
 
-    for (const pg of pagos_hoy.filter((x) => x.cliente_id === c.id)) {
+    for (const pg of pagosRuta.filter((x) => x.cliente_id === c.id)) {
       if (prestamosEnAgenda.has(pg.prestamo_id)) continue;
       const pr = prestamoPorId.get(pg.prestamo_id);
       if (!pr) continue;
@@ -116,7 +123,7 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
   const pendiente = agenda.filter((v) => v.estado_visita === 'pendiente').length;
   const total = agenda.length;
   const visitadas = cobrado + no_pago;
-  const monto_cobrado = pagos_hoy.reduce((s, p) => s + Number(p.monto_pagado || 0), 0);
+  const monto_cobrado = pagosRuta.reduce((s, p) => s + Number(p.monto_pagado || 0), 0);
 
   return {
     agenda,
@@ -129,8 +136,8 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
       porcentaje: total ? Math.round((visitadas / total) * 100) : 0,
       monto_cobrado,
     },
-    pagos_hoy,
-    gestiones_hoy,
+    pagos_hoy: pagosRuta,
+    gestiones_hoy: gestionesRuta,
     prestamoIdsPagos,
     prestamoPorId,
   };
@@ -308,7 +315,8 @@ async function buildAgendaCobrador(query, cobradorId, fechaISO) {
     datos.prestamos,
     datos.cuotas,
     datos.pagos_hoy,
-    datos.gestiones_hoy
+    datos.gestiones_hoy,
+    cobradorId
   );
   return {
     dia_cobro: diaCobroDeFecha(datos.hoy),
@@ -347,7 +355,8 @@ async function buildCumplimientoBatch(query, cobradores, fechaISO, { incluirVisi
       prestamosCob,
       datos.cuotas,
       pagosCob,
-      gestCob
+      gestCob,
+      cob.id
     );
 
     filas.push({

@@ -25,6 +25,15 @@ const incluyeDiaEnFecha = (fechaISO, diasRaw) => {
 };
 
 /** Arma agenda + resumen en memoria (sin SQL). */
+function estadoVisitaDesdePago(pg) {
+  if (!pg) return null;
+  return Number(pg.registrado_por_admin) === 1 ? 'cobrado_admin' : 'cobrado';
+}
+
+function esVisitaCobrada(estado) {
+  return estado === 'cobrado' || estado === 'cobrado_admin';
+}
+
 function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gestiones_hoy) {
   const agenda = [];
   const pagoPorPrestamo = new Map(pagos_hoy.map((pg) => [pg.prestamo_id, pg]));
@@ -53,12 +62,20 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
       orden_visita: c.orden_visita,
       saldo_pendiente: p.saldo_pendiente,
       tipo_visita: extra.tipo_visita || 'activo',
-      etiqueta_visita: extra.etiqueta_visita || null,
       estado_visita:
         extra.estado_visita ??
-        (pagoPorPrestamo.has(p.id) ? 'cobrado' : gestionPorPrestamo.has(p.id) ? 'no_pago' : 'pendiente'),
+        (pagoPorPrestamo.has(p.id)
+          ? estadoVisitaDesdePago(pagoPorPrestamo.get(p.id))
+          : gestionPorPrestamo.has(p.id)
+            ? 'no_pago'
+            : 'pendiente'),
       pago_hoy_id: extra.pago_hoy_id ?? pagoPorPrestamo.get(p.id)?.id ?? null,
       motivo_no_pago: gestionPorPrestamo.get(p.id)?.motivo ?? null,
+      etiqueta_visita:
+        extra.etiqueta_visita ??
+        (pagoPorPrestamo.has(p.id) && Number(pagoPorPrestamo.get(p.id).registrado_por_admin) === 1
+          ? 'Cobrado por administrador'
+          : null),
     });
   };
 
@@ -76,11 +93,13 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
       const pr = prestamoPorId.get(pg.prestamo_id);
       if (!pr) continue;
       const esLiquidacion = pr.estado === 'Pagado' || Number(pr.saldo_pendiente || 0) <= 0;
+      const ev = estadoVisitaDesdePago(pg);
       pushAgendaItem(c, pr, null, {
         monto_programado: Number(pg.monto_pagado),
         tipo_visita: esLiquidacion ? 'liquidado' : 'cobrado',
-        etiqueta_visita: esLiquidacion ? 'Liquidacion' : 'Cobro registrado',
-        estado_visita: 'cobrado',
+        etiqueta_visita:
+          esLiquidacion ? 'Liquidacion' : ev === 'cobrado_admin' ? 'Cobrado por administrador' : 'Cobro registrado',
+        estado_visita: ev,
         pago_hoy_id: pg.id,
       });
     }
@@ -92,7 +111,7 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
     return String(a.prestamo_id).localeCompare(String(b.prestamo_id));
   });
 
-  const cobrado = agenda.filter((v) => v.estado_visita === 'cobrado').length;
+  const cobrado = agenda.filter((v) => esVisitaCobrada(v.estado_visita)).length;
   const no_pago = agenda.filter((v) => v.estado_visita === 'no_pago').length;
   const pendiente = agenda.filter((v) => v.estado_visita === 'pendiente').length;
   const total = agenda.length;
@@ -125,9 +144,9 @@ async function cargarDatosCobrador(query, cobradorId, fechaISO) {
      FROM Clientes c
      INNER JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
      INNER JOIN Rutas r ON rc.ruta_id = r.id AND r.cobrador_id = ? AND r.activa = 1
-     WHERE c.deleted_at IS NULL AND c.cobrador_id = ?
+     WHERE c.deleted_at IS NULL
      ORDER BY rc.orden_visita ASC, c.id`,
-    [cobradorId, cobradorId]
+    [cobradorId]
   );
 
   const clienteIds = clientes.map((c) => c.id);
@@ -163,17 +182,17 @@ async function cargarDatosCobrador(query, cobradorId, fechaISO) {
       `SELECT pg.*, p.cliente_id
        FROM Pagos pg
        INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-       WHERE pg.cobrador_id = ? AND DATE(pg.fecha_pago) = DATE(?) AND pg.deleted_at IS NULL
+       WHERE DATE(pg.fecha_pago) = DATE(?) AND pg.deleted_at IS NULL
          AND p.cliente_id IN (${ph2})`,
-      [cobradorId, hoy, ...clienteIds]
+      [hoy, ...clienteIds]
     );
     gestiones_hoy = await query(
       `SELECT g.*, p.cliente_id
        FROM Gestiones_No_Pago g
        INNER JOIN Prestamos p ON g.prestamo_id = p.id
-       WHERE g.cobrador_id = ? AND DATE(g.fecha_gestion) = DATE(?) AND g.deleted_at IS NULL
+       WHERE DATE(g.fecha_gestion) = DATE(?) AND g.deleted_at IS NULL
          AND p.cliente_id IN (${ph2})`,
-      [cobradorId, hoy, ...clienteIds]
+      [hoy, ...clienteIds]
     );
 
     const prestamoIdsPagos = [
@@ -204,13 +223,13 @@ async function cargarDatosTodosCobradores(query, cobradorIds, fechaISO) {
   const ph = cobradorIds.map(() => '?').join(',');
 
   const clientes = await query(
-    `SELECT DISTINCT c.*, rc.orden_visita, r.cobrador_id
+    `SELECT DISTINCT c.*, rc.orden_visita, r.cobrador_id AS ruta_cobrador_id
      FROM Clientes c
      INNER JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
      INNER JOIN Rutas r ON rc.ruta_id = r.id AND r.cobrador_id IN (${ph}) AND r.activa = 1
-     WHERE c.deleted_at IS NULL AND c.cobrador_id IN (${ph})
+     WHERE c.deleted_at IS NULL
      ORDER BY r.cobrador_id, rc.orden_visita ASC, c.id`,
-    [...cobradorIds, ...cobradorIds]
+    [...cobradorIds]
   );
 
   const clienteIds = [...new Set(clientes.map((c) => c.id))];
@@ -247,15 +266,17 @@ async function cargarDatosTodosCobradores(query, cobradorIds, fechaISO) {
       `SELECT pg.*, p.cliente_id
        FROM Pagos pg
        INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-       WHERE pg.cobrador_id IN (${ph}) AND DATE(pg.fecha_pago) = DATE(?) AND pg.deleted_at IS NULL`,
-      [...cobradorIds, hoy]
+       WHERE DATE(pg.fecha_pago) = DATE(?) AND pg.deleted_at IS NULL
+         AND p.cliente_id IN (${ph2})`,
+      [hoy, ...clienteIds]
     );
     gestiones_hoy = await query(
       `SELECT g.*, p.cliente_id
        FROM Gestiones_No_Pago g
        INNER JOIN Prestamos p ON g.prestamo_id = p.id
-       WHERE g.cobrador_id IN (${ph}) AND DATE(g.fecha_gestion) = DATE(?) AND g.deleted_at IS NULL`,
-      [...cobradorIds, hoy]
+       WHERE DATE(g.fecha_gestion) = DATE(?) AND g.deleted_at IS NULL
+         AND p.cliente_id IN (${ph2})`,
+      [hoy, ...clienteIds]
     );
 
     const prestamoPorId = new Map(prestamos.map((p) => [p.id, p]));
@@ -314,11 +335,11 @@ async function buildCumplimientoBatch(query, cobradores, fechaISO, { incluirVisi
 
   const filas = [];
   for (const cob of cobradores) {
-    const clientesCob = datos.clientes.filter((c) => c.cobrador_id === cob.id);
+    const clientesCob = datos.clientes.filter((c) => c.ruta_cobrador_id === cob.id);
     const clienteIds = new Set(clientesCob.map((c) => c.id));
     const prestamosCob = datos.prestamos.filter((p) => clienteIds.has(p.cliente_id));
-    const pagosCob = datos.pagos_hoy.filter((pg) => pg.cobrador_id === cob.id);
-    const gestCob = datos.gestiones_hoy.filter((g) => g.cobrador_id === cob.id);
+    const pagosCob = datos.pagos_hoy.filter((pg) => clienteIds.has(pg.cliente_id));
+    const gestCob = datos.gestiones_hoy.filter((g) => clienteIds.has(g.cliente_id));
 
     const armado = armarAgendaDesdeDatos(
       datos.hoy,
@@ -343,7 +364,7 @@ async function buildCumplimientoBatch(query, cobradores, fechaISO, { incluirVisi
 }
 
 function resumirAgenda(agenda, pagos_hoy = []) {
-  const cobrado = agenda.filter((v) => v.estado_visita === 'cobrado').length;
+  const cobrado = agenda.filter((v) => esVisitaCobrada(v.estado_visita)).length;
   const no_pago = agenda.filter((v) => v.estado_visita === 'no_pago').length;
   const pendiente = agenda.filter((v) => v.estado_visita === 'pendiente').length;
   const total = agenda.length;

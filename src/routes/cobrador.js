@@ -57,9 +57,9 @@ async function rutaDiaria(req, res) {
        FROM Clientes c
        INNER JOIN Ruta_Clientes rc ON c.id = rc.cliente_id
        INNER JOIN Rutas r ON rc.ruta_id = r.id AND r.cobrador_id = ? AND r.activa = 1
-       WHERE c.deleted_at IS NULL AND c.cobrador_id = ?
+       WHERE c.deleted_at IS NULL
        ORDER BY rc.orden_visita ASC, c.id`,
-      [cobradorId, cobradorId]
+      [cobradorId]
     );
 
     const clienteIds = clientes.map((c) => c.id);
@@ -133,21 +133,19 @@ async function rutaDiaria(req, res) {
                 pg.operador_id
          FROM Pagos pg
          INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-         WHERE pg.cobrador_id = ?
-           AND pg.fecha_pago >= ? AND pg.fecha_pago < ?
+         WHERE pg.fecha_pago >= ? AND pg.fecha_pago < ?
            AND pg.deleted_at IS NULL
            AND p.cliente_id IN (${ph2})`,
-        [cobradorId, diaIni, diaFin, ...clienteIds]
+        [diaIni, diaFin, ...clienteIds]
       );
       gestiones_hoy = await query(
         `SELECT g.*, p.cliente_id
          FROM Gestiones_No_Pago g
          INNER JOIN Prestamos p ON g.prestamo_id = p.id
-         WHERE g.cobrador_id = ?
-           AND g.fecha_gestion >= ? AND g.fecha_gestion < ?
+         WHERE g.fecha_gestion >= ? AND g.fecha_gestion < ?
            AND g.deleted_at IS NULL
            AND p.cliente_id IN (${ph2})`,
-        [cobradorId, diaIni, diaFin, ...clienteIds]
+        [diaIni, diaFin, ...clienteIds]
       );
     }
 

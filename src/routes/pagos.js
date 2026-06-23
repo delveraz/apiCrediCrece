@@ -40,9 +40,9 @@ async function syncMasivo(req, res) {
 
       const { inicio, fin } = rangoDiaLocal(pago.fecha_pago || new Date());
       const [cobroHoy] = await conn.execute(
-        `SELECT id FROM Pagos WHERE prestamo_id = ? AND deleted_at IS NULL
+        `SELECT id FROM Pagos WHERE prestamo_id = ? AND cobrador_id = ? AND deleted_at IS NULL
            AND fecha_pago >= ? AND fecha_pago < ? LIMIT 1`,
-        [pago.prestamo_id, inicio, fin]
+        [pago.prestamo_id, pago.cobrador_id, inicio, fin]
       );
       if (cobroHoy.length) continue;
 

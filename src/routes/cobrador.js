@@ -133,19 +133,21 @@ async function rutaDiaria(req, res) {
                 pg.operador_id
          FROM Pagos pg
          INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-         WHERE pg.fecha_pago >= ? AND pg.fecha_pago < ?
+         WHERE pg.cobrador_id = ?
+           AND pg.fecha_pago >= ? AND pg.fecha_pago < ?
            AND pg.deleted_at IS NULL
            AND p.cliente_id IN (${ph2})`,
-        [diaIni, diaFin, ...clienteIds]
+        [cobradorId, diaIni, diaFin, ...clienteIds]
       );
       gestiones_hoy = await query(
         `SELECT g.*, p.cliente_id
          FROM Gestiones_No_Pago g
          INNER JOIN Prestamos p ON g.prestamo_id = p.id
-         WHERE g.fecha_gestion >= ? AND g.fecha_gestion < ?
+         WHERE g.cobrador_id = ?
+           AND g.fecha_gestion >= ? AND g.fecha_gestion < ?
            AND g.deleted_at IS NULL
            AND p.cliente_id IN (${ph2})`,
-        [diaIni, diaFin, ...clienteIds]
+        [cobradorId, diaIni, diaFin, ...clienteIds]
       );
     }
 
@@ -766,10 +768,10 @@ async function pushSync(req, res) {
         const { inicio, fin } = rangoDiaLocal(p.fecha_pago || new Date());
         const [cobroHoy] = await conn.execute(
           `SELECT id, registrado_por_admin, operador_id FROM Pagos
-           WHERE prestamo_id = ? AND deleted_at IS NULL
+           WHERE prestamo_id = ? AND cobrador_id = ? AND deleted_at IS NULL
              AND fecha_pago >= ? AND fecha_pago < ?
            LIMIT 1`,
-          [p.prestamo_id, inicio, fin]
+          [p.prestamo_id, p.cobrador_id, inicio, fin]
         );
         if (cobroHoy.length) {
           errores.push({

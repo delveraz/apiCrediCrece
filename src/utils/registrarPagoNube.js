@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { calcularLiquidacionAnticipada } = require('./finanzasNube');
 const { exigirUsuarioActivo } = require('./assertUsuarioActivo');
+const { rangoDiaLocal } = require('./fechasSql');
 
 async function resolverCobradorAsignado(conn, prestamoId) {
   const [rows] = await conn.execute(
@@ -79,6 +80,21 @@ async function registrarPagoEnNube(conn, opts) {
     throw new Error(`Monto supera saldo pendiente (C$ ${Number(prestamo.saldo_pendiente).toFixed(2)})`);
   }
 
+  const { inicio, fin } = rangoDiaLocal(new Date());
+  const [cobroHoy] = await conn.execute(
+    `SELECT id, registrado_por_admin FROM Pagos
+     WHERE prestamo_id = ? AND deleted_at IS NULL AND fecha_pago >= ? AND fecha_pago < ?
+     LIMIT 1`,
+    [prestamoId, inicio, fin]
+  );
+  if (cobroHoy.length) {
+    throw new Error(
+      Number(cobroHoy[0].registrado_por_admin) === 1
+        ? 'Este credito ya fue cobrado hoy.'
+        : 'Este credito ya tiene un cobro registrado hoy por el cobrador.'
+    );
+  }
+
   const pagoId = uuidv4();
   const fecha = new Date().toISOString();
   const nuevoSaldo = Math.max(0, Number((Number(prestamo.saldo_pendiente) - montoEfectivo).toFixed(2)));
@@ -146,4 +162,8 @@ async function registrarGestionNoPagoEnNube(conn, opts) {
   return { id, cobrador_id: cobradorRegistro };
 }
 
-module.exports = { registrarPagoEnNube, registrarGestionNoPagoEnNube };
+module.exports = {
+  registrarPagoEnNube,
+  registrarGestionNoPagoEnNube,
+  aplicarMontoACuotas,
+};

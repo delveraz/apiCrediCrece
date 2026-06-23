@@ -1,5 +1,7 @@
 const { getConnection } = require('../config/db');
 const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
+const { aplicarMontoACuotas } = require('../utils/registrarPagoNube');
+const { rangoDiaLocal } = require('../utils/fechasSql');
 
 /**
  * Recibe lote de pagos offline desde SQLite y los persiste en TiDB Cloud.
@@ -30,6 +32,23 @@ async function syncMasivo(req, res) {
       );
       if (existente.length > 0) continue;
 
+      const [prestamoOk] = await conn.execute(
+        'SELECT id, saldo_pendiente FROM Prestamos WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+        [pago.prestamo_id]
+      );
+      if (!prestamoOk.length) continue;
+
+      const { inicio, fin } = rangoDiaLocal(pago.fecha_pago || new Date());
+      const [cobroHoy] = await conn.execute(
+        `SELECT id FROM Pagos WHERE prestamo_id = ? AND deleted_at IS NULL
+           AND fecha_pago >= ? AND fecha_pago < ? LIMIT 1`,
+        [pago.prestamo_id, inicio, fin]
+      );
+      if (cobroHoy.length) continue;
+
+      const monto = Number(pago.monto_pagado);
+      const prestamo = prestamoOk[0];
+
       await conn.execute(
         `INSERT INTO Pagos (id, prestamo_id, cobrador_id, monto_pagado, fecha_pago, latitud, longitud, is_synced)
          VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
@@ -37,32 +56,18 @@ async function syncMasivo(req, res) {
           pago.id,
           pago.prestamo_id,
           pago.cobrador_id,
-          pago.monto_pagado,
+          monto,
           pago.fecha_pago,
           pago.latitud,
           pago.longitud,
         ]
       );
 
+      await aplicarMontoACuotas(conn, pago.prestamo_id, monto);
+      const nuevoSaldo = Math.max(0, Number((Number(prestamo.saldo_pendiente) - monto).toFixed(2)));
       await conn.execute(
-        `UPDATE Prestamos
-         SET saldo_pendiente = GREATEST(0, saldo_pendiente - ?),
-             updated_at = NOW(),
-             is_synced = 1
-         WHERE id = ?`,
-        [pago.monto_pagado, pago.prestamo_id]
-      );
-
-      await conn.execute(
-        `UPDATE Cuotas_Calendario
-         SET monto_pagado = monto_pagado + ?,
-             estado = CASE WHEN monto_pagado + ? >= monto_programado THEN 'Pagada' ELSE 'Parcial' END,
-             updated_at = NOW(),
-             is_synced = 1
-         WHERE prestamo_id = ? AND estado IN ('Programada', 'Parcial')
-         ORDER BY fecha_programada ASC
-         LIMIT 1`,
-        [pago.monto_pagado, pago.monto_pagado, pago.prestamo_id]
+        `UPDATE Prestamos SET saldo_pendiente = ?, updated_at = NOW(), is_synced = 1 WHERE id = ?`,
+        [nuevoSaldo, pago.prestamo_id]
       );
 
       procesados += 1;

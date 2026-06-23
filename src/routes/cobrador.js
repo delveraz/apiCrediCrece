@@ -16,6 +16,7 @@ const { buildRutaDiariaAdmin } = require('../utils/rutaDiariaAdmin');
 const { rangoDiaLocal } = require('../utils/fechasSql');
 const { ensureRutaForCobrador, agregarClienteARuta } = require('../utils/rutas');
 const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
+const { aplicarMontoACuotas } = require('../utils/registrarPagoNube');
 
 /**
  * Clientes asignados al cobrador + ruta del dia.
@@ -341,6 +342,10 @@ async function pushSync(req, res) {
 
     await exigirUsuarioActivo(cobradorId || req.operadorId, conn);
 
+    const prestamoIdsConPagos = new Set(
+      pagos.map((p) => p.prestamo_id).filter(Boolean)
+    );
+
     const prestamosNuevos = [];
     const prestamosCerrados = [];
     for (const p of prestamos) {
@@ -495,45 +500,86 @@ async function pushSync(req, res) {
 
         const [ex] = await conn.execute('SELECT id FROM Prestamos WHERE id = ?', [p.id]);
         if (ex.length) {
-          await conn.execute(
-            `UPDATE Prestamos SET
-              cliente_id = ?, fiador_id = ?,
-              monto_desembolsado = COALESCE(?, monto_desembolsado),
-              plazo_semanas = COALESCE(?, plazo_semanas),
-              tasa_interes_aplicada = COALESCE(?, tasa_interes_aplicada),
-              cuota_semanal_base = COALESCE(?, cuota_semanal_base),
-              monto_total_pagar = COALESCE(?, monto_total_pagar),
-              saldo_pendiente = COALESCE(?, saldo_pendiente),
-              frecuencia_semana = COALESCE(?, frecuencia_semana),
-              dias_de_cobro = COALESCE(?, dias_de_cobro),
-              estado = COALESCE(?, estado),
-              fecha_desembolso = COALESCE(?, fecha_desembolso),
-              renovacion_previa_id = COALESCE(?, renovacion_previa_id),
-              numero_recibo_fisico = COALESCE(?, numero_recibo_fisico),
-              cobrador_registro_id = COALESCE(?, cobrador_registro_id),
-              cobrador_entrega_id = COALESCE(?, cobrador_entrega_id),
-              is_synced = 1, updated_at = NOW()
-             WHERE id = ?`,
-            [
-              clienteId,
-              fiadorId,
-              p.monto_desembolsado,
-              p.plazo_semanas,
-              p.tasa_interes_aplicada,
-              p.cuota_semanal_base,
-              p.monto_total_pagar,
-              p.saldo_pendiente,
-              p.frecuencia_semana,
-              dias,
-              p.estado || 'Activo',
-              p.fecha_desembolso,
-              p.renovacion_previa_id || null,
-              p.numero_recibo_fisico || null,
-              p.cobrador_registro_id || null,
-              p.cobrador_entrega_id || null,
-              p.id,
-            ]
-          );
+          const omitirSaldo = prestamoIdsConPagos.has(p.id);
+          if (omitirSaldo) {
+            await conn.execute(
+              `UPDATE Prestamos SET
+                cliente_id = ?, fiador_id = ?,
+                monto_desembolsado = COALESCE(?, monto_desembolsado),
+                plazo_semanas = COALESCE(?, plazo_semanas),
+                tasa_interes_aplicada = COALESCE(?, tasa_interes_aplicada),
+                cuota_semanal_base = COALESCE(?, cuota_semanal_base),
+                monto_total_pagar = COALESCE(?, monto_total_pagar),
+                frecuencia_semana = COALESCE(?, frecuencia_semana),
+                dias_de_cobro = COALESCE(?, dias_de_cobro),
+                estado = COALESCE(?, estado),
+                fecha_desembolso = COALESCE(?, fecha_desembolso),
+                renovacion_previa_id = COALESCE(?, renovacion_previa_id),
+                numero_recibo_fisico = COALESCE(?, numero_recibo_fisico),
+                cobrador_registro_id = COALESCE(?, cobrador_registro_id),
+                cobrador_entrega_id = COALESCE(?, cobrador_entrega_id),
+                is_synced = 1, updated_at = NOW()
+               WHERE id = ?`,
+              [
+                clienteId,
+                fiadorId,
+                p.monto_desembolsado,
+                p.plazo_semanas,
+                p.tasa_interes_aplicada,
+                p.cuota_semanal_base,
+                p.monto_total_pagar,
+                p.frecuencia_semana,
+                dias,
+                p.estado || 'Activo',
+                p.fecha_desembolso,
+                p.renovacion_previa_id || null,
+                p.numero_recibo_fisico || null,
+                p.cobrador_registro_id || null,
+                p.cobrador_entrega_id || null,
+                p.id,
+              ]
+            );
+          } else {
+            await conn.execute(
+              `UPDATE Prestamos SET
+                cliente_id = ?, fiador_id = ?,
+                monto_desembolsado = COALESCE(?, monto_desembolsado),
+                plazo_semanas = COALESCE(?, plazo_semanas),
+                tasa_interes_aplicada = COALESCE(?, tasa_interes_aplicada),
+                cuota_semanal_base = COALESCE(?, cuota_semanal_base),
+                monto_total_pagar = COALESCE(?, monto_total_pagar),
+                saldo_pendiente = COALESCE(?, saldo_pendiente),
+                frecuencia_semana = COALESCE(?, frecuencia_semana),
+                dias_de_cobro = COALESCE(?, dias_de_cobro),
+                estado = COALESCE(?, estado),
+                fecha_desembolso = COALESCE(?, fecha_desembolso),
+                renovacion_previa_id = COALESCE(?, renovacion_previa_id),
+                numero_recibo_fisico = COALESCE(?, numero_recibo_fisico),
+                cobrador_registro_id = COALESCE(?, cobrador_registro_id),
+                cobrador_entrega_id = COALESCE(?, cobrador_entrega_id),
+                is_synced = 1, updated_at = NOW()
+               WHERE id = ?`,
+              [
+                clienteId,
+                fiadorId,
+                p.monto_desembolsado,
+                p.plazo_semanas,
+                p.tasa_interes_aplicada,
+                p.cuota_semanal_base,
+                p.monto_total_pagar,
+                p.saldo_pendiente,
+                p.frecuencia_semana,
+                dias,
+                p.estado || 'Activo',
+                p.fecha_desembolso,
+                p.renovacion_previa_id || null,
+                p.numero_recibo_fisico || null,
+                p.cobrador_registro_id || null,
+                p.cobrador_entrega_id || null,
+                p.id,
+              ]
+            );
+          }
         } else {
           await conn.execute(
             `INSERT INTO Prestamos (
@@ -709,9 +755,44 @@ async function pushSync(req, res) {
           continue;
         }
 
-        const [prestamoOk] = await conn.execute('SELECT id FROM Prestamos WHERE id = ?', [p.prestamo_id]);
+        const [prestamoOk] = await conn.execute(
+          'SELECT id, saldo_pendiente, monto_total_pagar FROM Prestamos WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+          [p.prestamo_id]
+        );
         if (!prestamoOk.length) {
           throw new Error(`Prestamo ${p.prestamo_id} no existe en TiDB aun.`);
+        }
+        const prestamo = prestamoOk[0];
+
+        const { inicio, fin } = rangoDiaLocal(p.fecha_pago || new Date());
+        const [cobroHoy] = await conn.execute(
+          `SELECT id, registrado_por_admin, operador_id FROM Pagos
+           WHERE prestamo_id = ? AND deleted_at IS NULL
+             AND fecha_pago >= ? AND fecha_pago < ?
+           LIMIT 1`,
+          [p.prestamo_id, inicio, fin]
+        );
+        if (cobroHoy.length) {
+          errores.push({
+            tipo: 'pago',
+            id: p.id,
+            code: 'cobro_ya_registrado',
+            message:
+              Number(cobroHoy[0].registrado_por_admin) === 1
+                ? 'Este credito ya fue cobrado hoy por el administrador.'
+                : 'Este credito ya tiene un cobro registrado hoy.',
+            prestamo_id: p.prestamo_id,
+            pago_existente_id: cobroHoy[0].id,
+          });
+          continue;
+        }
+
+        const montoEfectivo = Number(p.monto_pagado);
+        if (montoEfectivo <= 0) throw new Error('Monto invalido');
+        if (montoEfectivo > Number(prestamo.saldo_pendiente) + 0.01) {
+          throw new Error(
+            `Monto supera saldo pendiente (C$ ${Number(prestamo.saldo_pendiente).toFixed(2)})`
+          );
         }
 
         await conn.execute(
@@ -722,7 +803,7 @@ async function pushSync(req, res) {
             p.id,
             p.prestamo_id,
             p.cobrador_id,
-            p.monto_pagado,
+            montoEfectivo,
             p.fecha_pago,
             n(p.latitud, 0),
             n(p.longitud, 0),
@@ -730,10 +811,18 @@ async function pushSync(req, res) {
             p.operador_id || p.cobrador_id,
           ]
         );
-        await conn.execute(
-          `UPDATE Prestamos SET saldo_pendiente = GREATEST(0, saldo_pendiente - ?), updated_at = NOW() WHERE id = ?`,
-          [p.monto_pagado, p.prestamo_id]
+
+        await aplicarMontoACuotas(conn, p.prestamo_id, montoEfectivo);
+        const nuevoSaldo = Math.max(
+          0,
+          Number((Number(prestamo.saldo_pendiente) - montoEfectivo).toFixed(2))
         );
+        const estadoPrestamo = nuevoSaldo <= 0 ? 'Pagado' : 'Activo';
+        await conn.execute(
+          `UPDATE Prestamos SET saldo_pendiente = ?, estado = ?, updated_at = NOW(), is_synced = 1 WHERE id = ?`,
+          [nuevoSaldo, estadoPrestamo, p.prestamo_id]
+        );
+
         synced.pagos.push(p.id);
         procesados++;
       } catch (err) {

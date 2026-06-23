@@ -101,6 +101,7 @@ app.get('/api/cobrador/ruta-diaria/:cobradorId', cobrador.rutaDiaria);
 app.get('/api/cobrador/cierre-hoy/:cobradorId', cobrador.cierreHoy);
 app.post('/api/cobrador/sync/push', cobrador.pushSync);
 app.get('/api/cobrador/sync/aviso/:cobradorId', cobrador.syncAviso);
+app.get('/api/cobrador/correcciones/:cobradorId', cobrador.getCorreccionesAdmin);
 app.post('/api/cobrador/solicitud-correccion', cobrador.crearSolicitudCorreccion);
 
 app.post('/api/pagos/sync-masivo', syncMasivo);

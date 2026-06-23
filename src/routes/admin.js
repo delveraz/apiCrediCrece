@@ -29,6 +29,7 @@ const {
 const { normalizarCedula, validarCedula } = require('../utils/cedulaNic');
 const { datosWhatsAppCliente } = require('../utils/whatsappCliente');
 const { aplicarProrrogaEnNube } = require('../utils/prorrogasNube');
+const { aplicarMontoACuotas, revertirMontoDeCuotas } = require('../utils/registrarPagoNube');
 const { generarRespaldoSql } = require('../utils/respaldoSql');
 
 const txt = (v) => {
@@ -863,7 +864,7 @@ async function listPagosDelDia(req, res) {
     const cobrador_id = req.query.cobrador_id || null;
     let sql = `
       SELECT pg.id, pg.prestamo_id, pg.cobrador_id, pg.monto_pagado, pg.fecha_pago,
-             pg.latitud, pg.longitud, pg.updated_at,
+             pg.latitud, pg.longitud, pg.updated_at, pg.editado_por_admin_at,
              c.id AS cliente_id, c.nombre_completo, c.cedula, c.telefono,
              u.nombre_completo AS cobrador_nombre, p.saldo_pendiente, p.estado AS estado_prestamo,
              p.fecha_desembolso, p.plazo_semanas, p.dias_de_cobro
@@ -1108,15 +1109,19 @@ async function updatePago(req, res) {
 
     await conn.execute(
       `UPDATE Pagos SET monto_pagado = ?, fecha_pago = COALESCE(?, fecha_pago),
-        updated_at = NOW(), is_synced = 1,
-        editado_por_admin_at = CASE WHEN ? <> ? THEN NOW() ELSE editado_por_admin_at END
+        updated_at = NOW(), is_synced = 1, editado_por_admin_at = NOW()
        WHERE id = ?`,
-      [montoNuevo, fechaNueva, montoNuevo, montoAnterior, id]
+      [montoNuevo, fechaNueva, id]
     );
 
     if (diff !== 0) {
+      if (diff > 0) {
+        await aplicarMontoACuotas(conn, pago.prestamo_id, diff);
+      } else {
+        await revertirMontoDeCuotas(conn, pago.prestamo_id, Math.abs(diff));
+      }
       await conn.execute(
-        `UPDATE Prestamos SET saldo_pendiente = GREATEST(0, saldo_pendiente - ?), updated_at = NOW() WHERE id = ?`,
+        `UPDATE Prestamos SET saldo_pendiente = GREATEST(0, saldo_pendiente - ?), updated_at = NOW(), is_synced = 1 WHERE id = ?`,
         [diff, pago.prestamo_id]
       );
       const [prest] = await conn.execute('SELECT saldo_pendiente FROM Prestamos WHERE id = ?', [pago.prestamo_id]);

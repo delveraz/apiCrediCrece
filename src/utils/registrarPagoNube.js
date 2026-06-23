@@ -42,6 +42,35 @@ async function aplicarMontoACuotas(conn, prestamoId, monto, fechaISO) {
   }
 }
 
+/** Revierte abono de cuotas (de la más reciente hacia atrás) al corregir un pago hacia abajo. */
+async function revertirMontoDeCuotas(conn, prestamoId, monto) {
+  let restante = Number(monto);
+  if (restante <= 0) return;
+
+  const [cuotas] = await conn.execute(
+    `SELECT id, monto_programado, monto_pagado FROM Cuotas_Calendario
+     WHERE prestamo_id = ? AND COALESCE(monto_pagado, 0) > 0.009 AND deleted_at IS NULL
+     ORDER BY fecha_programada DESC`,
+    [prestamoId]
+  );
+
+  for (const cuota of cuotas) {
+    if (restante <= 0) break;
+    const pagado = Number(cuota.monto_pagado || 0);
+    const quitar = Math.min(restante, pagado);
+    const nuevo = Number((pagado - quitar).toFixed(2));
+    let estado = 'Programada';
+    if (nuevo >= Number(cuota.monto_programado) - 0.01) estado = 'Pagada';
+    else if (nuevo > 0.009) estado = 'Parcial';
+    await conn.execute(
+      `UPDATE Cuotas_Calendario SET monto_pagado = ?, estado = ?, updated_at = NOW(), is_synced = 1
+       WHERE id = ?`,
+      [nuevo, estado, cuota.id]
+    );
+    restante = Number((restante - quitar).toFixed(2));
+  }
+}
+
 /**
  * Registra cobro en TiDB (admin modo campo — siempre en línea).
  */
@@ -166,4 +195,5 @@ module.exports = {
   registrarPagoEnNube,
   registrarGestionNoPagoEnNube,
   aplicarMontoACuotas,
+  revertirMontoDeCuotas,
 };

@@ -1019,7 +1019,60 @@ async function pushSync(req, res) {
   }
 }
 
-/** Aviso ligero: indica si el admin corrigio cobros desde la ultima sesion completa del cobrador */
+/** Parche ligero: pagos corregidos por admin + préstamos/cuotas afectados (sin descargar ruta completa). */
+async function getCorreccionesAdmin(req, res) {
+  try {
+    const { cobradorId } = req.params;
+    await exigirUsuarioActivo(cobradorId);
+    const desde = req.query.desde || '1970-01-01T00:00:00.000Z';
+
+    const pagos = await query(
+      `SELECT pg.id, pg.prestamo_id, pg.cobrador_id, pg.monto_pagado, pg.fecha_pago,
+              pg.latitud, pg.longitud, pg.registrado_por_admin, pg.operador_id,
+              pg.updated_at, pg.editado_por_admin_at
+       FROM Pagos pg
+       WHERE pg.cobrador_id = ? AND pg.deleted_at IS NULL
+         AND pg.editado_por_admin_at IS NOT NULL
+         AND pg.editado_por_admin_at > ?
+       ORDER BY pg.editado_por_admin_at ASC`,
+      [cobradorId, desde]
+    );
+
+    const serverTime = new Date().toISOString();
+    if (!pagos.length) {
+      return res.json({ success: true, serverTime, pagos: [], prestamos: [], cuotas: [] });
+    }
+
+    const prestamoIds = [...new Set(pagos.map((p) => p.prestamo_id))];
+    const ph = prestamoIds.map(() => '?').join(',');
+
+    const prestamos = await query(
+      `SELECT p.id, p.cliente_id, p.saldo_pendiente, p.estado, p.cuota_semanal_base,
+              p.monto_total_pagar, p.monto_desembolsado, p.plazo_semanas,
+              p.tasa_interes_aplicada, p.dias_de_cobro, p.frecuencia_semana,
+              p.fecha_desembolso, p.fiador_id, p.cobrador_registro_id, p.cobrador_entrega_id,
+              p.numero_recibo_fisico, p.updated_at
+       FROM Prestamos p
+       WHERE p.id IN (${ph}) AND p.deleted_at IS NULL`,
+      prestamoIds
+    );
+
+    const cuotas = await query(
+      `SELECT id, prestamo_id, fecha_programada, monto_programado, monto_pagado,
+              estado, cobrador_id, updated_at
+       FROM Cuotas_Calendario
+       WHERE prestamo_id IN (${ph}) AND deleted_at IS NULL
+       ORDER BY fecha_programada ASC`,
+      prestamoIds
+    );
+
+    return res.json({ success: true, serverTime, pagos, prestamos, cuotas });
+  } catch (e) {
+    return responderErrorUsuario(res, e);
+  }
+}
+
+/** Aviso ligero: indica si el admin corrigio cobros desde la ultima actualizacion aplicada */
 async function syncAviso(req, res) {
   try {
     const { cobradorId } = req.params;
@@ -1038,7 +1091,8 @@ async function syncAviso(req, res) {
       success: true,
       serverTime: new Date().toISOString(),
       correccionesAdmin: n,
-      requiereReinicioSesion: n > 0,
+      requiereReinicioSesion: false,
+      requiereActualizacion: n > 0,
     });
   } catch (e) {
     return res.status(500).json({ success: false, message: e.message });
@@ -1213,6 +1267,7 @@ module.exports = {
   rutaDiaria,
   pushSync,
   syncAviso,
+  getCorreccionesAdmin,
   crearSolicitudCorreccion,
   cierreHoy,
   listPrestamosCobrador,

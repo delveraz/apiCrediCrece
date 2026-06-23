@@ -886,10 +886,12 @@ async function listPagosDelDia(req, res) {
   }
 }
 
-/** Abonos del día con cada cuota pagada listada por cliente (fecha, monto, saldo). */
-async function listPagosDetalleDia(req, res) {
+/** Abonos con detalle de cuotas por cliente (día, mes o rango). */
+async function listPagosDetalle(req, res) {
   try {
-    const fecha = req.query.fecha || new Date().toISOString().split('T')[0];
+    const hoy = new Date().toISOString().split('T')[0];
+    const desde = req.query.desde || req.query.fecha || hoy;
+    const hasta = req.query.hasta || req.query.fecha || desde;
     const cobrador_id = req.query.cobrador_id || null;
 
     let sqlPagos = `
@@ -901,9 +903,9 @@ async function listPagosDetalleDia(req, res) {
       INNER JOIN Prestamos p ON pg.prestamo_id = p.id AND p.deleted_at IS NULL
       INNER JOIN Clientes c ON p.cliente_id = c.id AND c.deleted_at IS NULL
       LEFT JOIN Usuarios u ON pg.cobrador_id = u.id
-      WHERE pg.deleted_at IS NULL AND DATE(pg.fecha_pago) = DATE(?)
+      WHERE pg.deleted_at IS NULL AND DATE(pg.fecha_pago) BETWEEN DATE(?) AND DATE(?)
     `;
-    const paramsPagos = [fecha];
+    const paramsPagos = [desde, hasta];
     if (cobrador_id) {
       sqlPagos += ' AND pg.cobrador_id = ?';
       paramsPagos.push(cobrador_id);
@@ -912,7 +914,7 @@ async function listPagosDetalleDia(req, res) {
     const pagos = await query(sqlPagos, paramsPagos);
 
     if (!pagos.length) {
-      return res.json({ success: true, fecha, pagos: [], cuotas: [], clientes: [] });
+      return res.json({ success: true, desde, hasta, pagos: [], cuotas: [], clientes: [] });
     }
 
     const prestamoIds = [...new Set(pagos.map((p) => p.prestamo_id))];
@@ -940,21 +942,20 @@ async function listPagosDetalleDia(req, res) {
       prestamoIds
     );
 
-    const pagoPorPrestamo = new Map();
+    const abonosPorCliente = new Map();
     for (const pg of pagos) {
-      if (!pagoPorPrestamo.has(pg.prestamo_id)) pagoPorPrestamo.set(pg.prestamo_id, pg);
+      const key = pg.cliente_id;
+      abonosPorCliente.set(key, (abonosPorCliente.get(key) || 0) + Number(pg.monto_pagado || 0));
     }
 
     const cuotasMarcadas = cuotas.map((cc) => {
-      const pg = pagoPorPrestamo.get(cc.prestamo_id);
       const upd = cc.cuota_actualizada ? new Date(cc.cuota_actualizada) : null;
-      const abonoHoy =
-        upd && !Number.isNaN(upd.getTime()) && upd.toISOString().slice(0, 10) === fecha;
+      const updIso = upd && !Number.isNaN(upd.getTime()) ? upd.toISOString().slice(0, 10) : null;
+      const abonoEnPeriodo = updIso && updIso >= desde && updIso <= hasta;
       return {
         ...cc,
-        abono_en_fecha: abonoHoy ? 'SI' : 'NO',
-        abono_dia: abonoHoy && pg ? Number(pg.monto_pagado) : null,
-        hora_cobro: abonoHoy && pg ? pg.fecha_pago : null,
+        abono_en_fecha: abonoEnPeriodo ? 'SI' : 'NO',
+        abono_en_periodo: abonoEnPeriodo ? 'SI' : 'NO',
       };
     });
 
@@ -970,8 +971,8 @@ async function listPagosDetalleDia(req, res) {
           cobrador_nombre: pg.cobrador_nombre,
           prestamo_id: pg.prestamo_id,
           saldo_pendiente: pg.saldo_pendiente,
-          abono_dia: Number(pg.monto_pagado),
-          hora_cobro: pg.fecha_pago,
+          abono_periodo: abonosPorCliente.get(key) || 0,
+          abono_dia: abonosPorCliente.get(key) || 0,
           cuotas: [],
         });
       }
@@ -984,15 +985,97 @@ async function listPagosDetalleDia(req, res) {
     const clientes = [...porCliente.values()].map((c) => ({
       ...c,
       total_cuotas_pagadas: c.cuotas.length,
-      cuotas_abonadas_hoy: c.cuotas.filter((q) => q.abono_en_fecha === 'SI').length,
+      cuotas_abonadas_periodo: c.cuotas.filter((q) => q.abono_en_periodo === 'SI').length,
+      cuotas_abonadas_hoy: c.cuotas.filter((q) => q.abono_en_periodo === 'SI').length,
     }));
 
     return res.json({
       success: true,
-      fecha,
+      desde,
+      hasta,
+      fecha: desde === hasta ? desde : null,
       pagos,
       cuotas: cuotasMarcadas,
       clientes,
+    });
+  } catch (e) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+}
+
+/** Estado de cuenta: préstamo, cuotas y abonos de un cliente. */
+async function getEstadoCuentaCliente(req, res) {
+  try {
+    const { id } = req.params;
+    const clientes = await query(
+      `SELECT c.*, uc.nombre_completo AS cobrador_nombre
+       FROM Clientes c
+       LEFT JOIN Usuarios uc ON c.cobrador_id = uc.id
+       WHERE c.id = ? AND c.deleted_at IS NULL
+       LIMIT 1`,
+      [id]
+    );
+    if (!clientes.length) {
+      return res.status(404).json({ success: false, message: 'Cliente no encontrado' });
+    }
+    const cliente = clientes[0];
+
+    const prestamos = await query(
+      `SELECT p.*, ur.nombre_completo AS registrado_por, ue.nombre_completo AS entregado_por
+       FROM Prestamos p
+       LEFT JOIN Usuarios ur ON p.cobrador_registro_id = ur.id
+       LEFT JOIN Usuarios ue ON p.cobrador_entrega_id = ue.id
+       WHERE p.cliente_id = ? AND p.deleted_at IS NULL
+       ORDER BY p.fecha_desembolso DESC`,
+      [id]
+    );
+
+    const prestamoActivo = prestamos.find((p) => p.estado === 'Activo') || prestamos[0] || null;
+    let cuotas = [];
+    let pagos = [];
+
+    if (prestamoActivo) {
+      cuotas = await query(
+        `SELECT cc.id AS cuota_id, cc.fecha_programada, cc.monto_programado, cc.monto_pagado,
+                cc.estado AS estado_cuota, cc.updated_at,
+                (SELECT COUNT(*) FROM Cuotas_Calendario q
+                 WHERE q.prestamo_id = cc.prestamo_id AND q.deleted_at IS NULL
+                   AND q.fecha_programada < cc.fecha_programada) + 1 AS numero_cuota
+         FROM Cuotas_Calendario cc
+         WHERE cc.prestamo_id = ? AND cc.deleted_at IS NULL
+         ORDER BY cc.fecha_programada ASC`,
+        [prestamoActivo.id]
+      );
+
+      pagos = await query(
+        `SELECT pg.id, pg.monto_pagado, pg.fecha_pago, pg.registrado_por_admin,
+                u.nombre_completo AS cobrador_nombre
+         FROM Pagos pg
+         LEFT JOIN Usuarios u ON pg.cobrador_id = u.id
+         WHERE pg.prestamo_id = ? AND pg.deleted_at IS NULL
+         ORDER BY pg.fecha_pago ASC`,
+        [prestamoActivo.id]
+      );
+    }
+
+    const totalAbonado = pagos.reduce((s, p) => s + Number(p.monto_pagado || 0), 0);
+    const cuotasPagadas = cuotas.filter((c) => c.estado_cuota === 'Pagada').length;
+    const cuotasPendientes = cuotas.filter((c) => ['Programada', 'Parcial'].includes(c.estado_cuota)).length;
+
+    return res.json({
+      success: true,
+      cliente,
+      prestamo_activo: prestamoActivo,
+      prestamos,
+      cuotas,
+      pagos,
+      resumen: {
+        saldo_pendiente: prestamoActivo ? Number(prestamoActivo.saldo_pendiente) : 0,
+        total_abonado: totalAbonado,
+        cuotas_pagadas: cuotasPagadas,
+        cuotas_pendientes: cuotasPendientes,
+        estado_prestamo: prestamoActivo?.estado || 'Sin préstamo',
+      },
     });
   } catch (e) {
     return res.status(500).json({ success: false, message: e.message });
@@ -1747,7 +1830,8 @@ module.exports = {
   crearPrestamo,
   renovacion,
   listPagosDelDia,
-  listPagosDetalleDia,
+  listPagosDetalle,
+  getEstadoCuentaCliente,
   updatePago,
   listSolicitudesCorreccion,
   syncRutasCobradores,

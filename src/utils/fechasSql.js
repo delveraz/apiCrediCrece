@@ -1,15 +1,12 @@
-/** Rango [inicio, fin) del día local del servidor para filtros indexables (sin DATE(col)). */
+const { hoyISO, rangoDiaNicaragua } = require('./zonaHoraria');
+
+/** Rango [inicio, fin) del día calendario Nicaragua para fecha_pago en UTC. */
 function rangoDiaLocal(fechaISO) {
-  const d = fechaISO ? String(fechaISO).slice(0, 10) : new Date().toISOString().slice(0, 10);
-  const inicio = `${d} 00:00:00`;
-  const finDate = new Date(`${d}T12:00:00`);
-  finDate.setDate(finDate.getDate() + 1);
-  const fin = finDate.toISOString().slice(0, 10) + ' 00:00:00';
-  return { inicio, fin };
+  return rangoDiaNicaragua(fechaISO);
 }
 
 function hoyRango() {
-  return rangoDiaLocal(new Date().toISOString().slice(0, 10));
+  return rangoDiaLocal(hoyISO());
 }
 
-module.exports = { rangoDiaLocal, hoyRango };
+module.exports = { rangoDiaLocal, hoyRango, hoyISO };

@@ -14,11 +14,16 @@ const normalizarDia = (d) =>
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
+const { hoyISO } = require('./zonaHoraria');
+
 const fechaCalendarioISO = (d = new Date()) => {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  const fmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Managua',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  return fmt.format(d);
 };
 
 const normalizarFechaISO = (valor) => {
@@ -32,7 +37,11 @@ const normalizarFechaISO = (valor) => {
   return m ? m[1] : null;
 };
 
-const diaCobroHoy = () => MAPA[new Date().getDay()];
+const diaCobroHoy = () => {
+  const hoy = hoyISO();
+  const d = new Date(`${hoy}T12:00:00`);
+  return MAPA[d.getDay()];
+};
 
 const diaCobroDeFecha = (fechaISO) => {
   const d = new Date(`${normalizarFechaISO(fechaISO) || fechaISO}T12:00:00`);

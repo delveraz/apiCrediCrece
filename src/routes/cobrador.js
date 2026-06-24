@@ -14,6 +14,7 @@ const { upsertFiadorEnNube, verificarFiadorEnNube, repararFiadoresHistoricos } =
 const { insertMany } = require('../utils/bulkSql');
 const { buildRutaDiariaAdmin } = require('../utils/rutaDiariaAdmin');
 const { rangoDiaLocal } = require('../utils/fechasSql');
+const { hoyISO } = require('../utils/zonaHoraria');
 const { ensureRutaForCobrador, sincronizarRutaClienteAsignado } = require('../utils/rutas');
 const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
 const { aplicarMontoACuotas } = require('../utils/registrarPagoNube');
@@ -1222,10 +1223,11 @@ async function pagosPorFecha(req, res) {
   try {
     const { cobradorId } = req.params;
     await exigirUsuarioActivo(cobradorId);
-    const fecha = req.query.fecha || new Date().toISOString().split('T')[0];
+    const fecha = req.query.fecha || hoyISO();
+    const { inicio, fin } = rangoDiaLocal(fecha);
     const rows = await query(
       `SELECT pg.id, pg.prestamo_id, pg.cobrador_id, pg.monto_pagado, pg.fecha_pago,
-              pg.registrado_por_admin, pg.operador_id,
+              pg.registrado_por_admin, pg.operador_id, pg.editado_por_admin_at,
               c.id AS cliente_id, c.nombre_completo, c.cedula, c.telefono,
               p.saldo_pendiente, p.fecha_desembolso, p.plazo_semanas, p.dias_de_cobro,
               u.nombre_completo AS cobrador_nombre
@@ -1233,9 +1235,10 @@ async function pagosPorFecha(req, res) {
        INNER JOIN Prestamos p ON pg.prestamo_id = p.id
        INNER JOIN Clientes c ON p.cliente_id = c.id
        LEFT JOIN Usuarios u ON pg.cobrador_id = u.id
-       WHERE pg.deleted_at IS NULL AND pg.cobrador_id = ? AND DATE(pg.fecha_pago) = DATE(?)
+       WHERE pg.deleted_at IS NULL AND pg.cobrador_id = ?
+         AND pg.fecha_pago >= ? AND pg.fecha_pago < ?
        ORDER BY pg.fecha_pago DESC`,
-      [cobradorId, fecha]
+      [cobradorId, inicio, fin]
     );
     return res.json({ success: true, data: rows, fecha });
   } catch (e) {
@@ -1247,14 +1250,16 @@ async function pagosPorFecha(req, res) {
 async function cierreHoy(req, res) {
   try {
     const { cobradorId } = req.params;
-    const hoy = new Date().toISOString().split('T')[0];
+    const hoy = hoyISO();
+    const { inicio, fin } = rangoDiaLocal(hoy);
     const rows = await query(
       `SELECT id, fecha_cierre, monto_efectivo, transacciones
        FROM Cierre_Caja
-       WHERE cobrador_id = ? AND deleted_at IS NULL AND DATE(fecha_cierre) = ?
+       WHERE cobrador_id = ? AND deleted_at IS NULL
+         AND fecha_cierre >= ? AND fecha_cierre < ?
        ORDER BY updated_at DESC
        LIMIT 1`,
-      [cobradorId, hoy]
+      [cobradorId, inicio, fin]
     );
     return res.json({ success: true, cierre: rows[0] || null });
   } catch (e) {

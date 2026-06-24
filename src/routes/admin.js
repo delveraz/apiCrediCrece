@@ -1581,17 +1581,16 @@ async function getCumplimientoRuta(req, res) {
 async function reabrirCierreCajaDia(req, res) {
   try {
     const { fechaCalendarioISO } = require('../utils/diasCobro');
-    const { rangoDiaLocal } = require('../utils/fechasSql');
+    const { whereCierreCalendarioDia } = require('../utils/fechasSql');
     const cobradorId = req.body?.cobrador_id;
     const fecha = req.body?.fecha || fechaCalendarioISO();
     if (!cobradorId) {
       return res.status(400).json({ success: false, message: 'cobrador_id requerido' });
     }
-    const { inicio, fin } = rangoDiaLocal(fecha);
     await query(
       `UPDATE Cierre_Caja SET deleted_at = NOW(), updated_at = NOW()
-       WHERE cobrador_id = ? AND deleted_at IS NULL AND fecha_cierre >= ? AND fecha_cierre < ?`,
-      [cobradorId, inicio, fin]
+       WHERE cobrador_id = ? AND deleted_at IS NULL AND ${whereCierreCalendarioDia('fecha_cierre')}`,
+      [cobradorId, fecha]
     );
     return res.json({
       success: true,

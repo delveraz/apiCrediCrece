@@ -14,7 +14,7 @@ const {
 const { upsertFiadorEnNube, verificarFiadorEnNube, repararFiadoresHistoricos } = require('../utils/fiadoresNube');
 const { insertMany } = require('../utils/bulkSql');
 const { buildRutaDiariaAdmin } = require('../utils/rutaDiariaAdmin');
-const { rangoDiaLocal } = require('../utils/fechasSql');
+const { rangoDiaLocal, whereCierreCalendarioDia } = require('../utils/fechasSql');
 const { hoyISO } = require('../utils/zonaHoraria');
 const { ensureRutaForCobrador, sincronizarRutaClienteAsignado } = require('../utils/rutas');
 const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
@@ -348,7 +348,6 @@ async function pushSync(req, res) {
     await exigirUsuarioActivo(cobradorId || req.operadorId, conn);
 
     const hoySync = hoyISO();
-    const { inicio: diaIni, fin: diaFin } = rangoDiaLocal(hoySync);
 
     const prestamoIdsConPagos = new Set(
       pagos.map((p) => p.prestamo_id).filter(Boolean)
@@ -937,9 +936,9 @@ async function pushSync(req, res) {
         const [dupDia] = await conn.execute(
           `SELECT id, monto_efectivo, transacciones FROM Cierre_Caja
            WHERE cobrador_id = ? AND deleted_at IS NULL
-             AND fecha_cierre >= ? AND fecha_cierre < ?
+             AND ${whereCierreCalendarioDia('fecha_cierre')}
            LIMIT 1`,
-          [cobId, diaIni, diaFin]
+          [cobId, hoySync]
         );
         if (dupDia.length) {
           errores.push({
@@ -1281,15 +1280,14 @@ async function cierreHoy(req, res) {
     const { cobradorId } = req.params;
     await exigirUsuarioActivo(cobradorId);
     const hoy = hoyISO();
-    const { inicio, fin } = rangoDiaLocal(hoy);
     const rows = await query(
       `SELECT id, fecha_cierre, monto_efectivo, transacciones
        FROM Cierre_Caja
        WHERE cobrador_id = ? AND deleted_at IS NULL
-         AND fecha_cierre >= ? AND fecha_cierre < ?
+         AND ${whereCierreCalendarioDia('fecha_cierre')}
        ORDER BY updated_at DESC
        LIMIT 1`,
-      [cobradorId, inicio, fin]
+      [cobradorId, hoy]
     );
     return res.json({ success: true, cierre: rows[0] || null, ya_cerrado: !!rows[0] });
   } catch (e) {
@@ -1304,15 +1302,14 @@ async function registrarCierreCaja(req, res) {
     await exigirUsuarioActivo(cobradorId);
 
     const hoy = hoyISO();
-    const { inicio, fin } = rangoDiaLocal(hoy);
     const existente = await query(
       `SELECT id, fecha_cierre, monto_efectivo, transacciones
        FROM Cierre_Caja
        WHERE cobrador_id = ? AND deleted_at IS NULL
-         AND fecha_cierre >= ? AND fecha_cierre < ?
+         AND ${whereCierreCalendarioDia('fecha_cierre')}
        ORDER BY updated_at DESC
        LIMIT 1`,
-      [cobradorId, inicio, fin]
+      [cobradorId, hoy]
     );
     if (existente.length) {
       return res.status(409).json({

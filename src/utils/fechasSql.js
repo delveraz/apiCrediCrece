@@ -9,4 +9,9 @@ function hoyRango() {
   return rangoDiaLocal(hoyISO());
 }
 
-module.exports = { rangoDiaLocal, hoyRango, hoyISO };
+/** Cierres guardan fecha calendario YYYY-MM-DD; usar DATE(), no rango horario. */
+function whereCierreCalendarioDia(columna = 'fecha_cierre') {
+  return `DATE(${columna}) = DATE(?)`;
+}
+
+module.exports = { rangoDiaLocal, hoyRango, hoyISO, whereCierreCalendarioDia };

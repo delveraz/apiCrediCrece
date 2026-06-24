@@ -100,11 +100,13 @@ async function registrarPagoEnNube(conn, opts) {
 
   if (esLiquidacion) {
     const liq = calcularLiquidacionAnticipada(prestamo);
-    montoEfectivo = liq.montoLiquidacion;
-    if (montoEfectivo <= 0) throw new Error('Este prestamo ya esta liquidado o sin saldo.');
+    montoEfectivo = Number(liq.montoLiquidacion);
+    if (!Number.isFinite(montoEfectivo) || montoEfectivo <= 0) {
+      throw new Error('Este prestamo ya esta liquidado o sin saldo.');
+    }
   }
 
-  if (montoEfectivo <= 0) throw new Error('Monto invalido');
+  if (!Number.isFinite(montoEfectivo) || montoEfectivo <= 0) throw new Error('Monto invalido');
   if (!esLiquidacion && montoEfectivo > Number(prestamo.saldo_pendiente) + 0.01) {
     throw new Error(`Monto supera saldo pendiente (C$ ${Number(prestamo.saldo_pendiente).toFixed(2)})`);
   }

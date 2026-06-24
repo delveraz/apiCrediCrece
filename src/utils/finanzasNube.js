@@ -94,27 +94,48 @@ const generarAgendaDeCobro = (fechaInicioISO, plazoSemanas, diasDeCobro = ['LUNE
   return agenda.sort((a, b) => a.fecha_programada.localeCompare(b.fecha_programada));
 };
 
+const numSeguro = (v, def = 0) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+};
+
+const normalizarFechaDesembolso = (valor) => {
+  if (valor == null || valor === '') return null;
+  const s = String(valor).trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const d = new Date(s.includes('T') ? s : `${s}T12:00:00`);
+  if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+  return null;
+};
+
 const semanasTranscurridas = (fechaDesembolsoISO, plazoSemanas, refDate = new Date()) => {
-  const inicio = new Date(`${String(fechaDesembolsoISO).slice(0, 10)}T12:00:00`);
+  const dia = normalizarFechaDesembolso(fechaDesembolsoISO);
+  const inicio = dia ? new Date(`${dia}T12:00:00`) : new Date(NaN);
+  if (Number.isNaN(inicio.getTime())) return 1;
+  const plazo = Math.max(1, numSeguro(plazoSemanas, 1));
   const diffMs = refDate - inicio;
   const dias = Math.max(0, Math.floor(diffMs / (1000 * 60 * 60 * 24)));
   const sem = Math.max(1, Math.ceil(dias / 7));
-  return Math.min(plazoSemanas, sem);
+  return Math.min(plazo, sem);
 };
 
 const calcularLiquidacionAnticipada = (prestamo, refDate = new Date()) => {
-  const capital = Number(prestamo.monto_desembolsado);
-  const plazo = Number(prestamo.plazo_semanas);
-  const tasaGlobal = Number(prestamo.tasa_interes_aplicada);
-  const saldo = Number(prestamo.saldo_pendiente);
-  const totalOriginal = Number(prestamo.monto_total_pagar);
+  const capital = numSeguro(prestamo.monto_desembolsado);
+  const plazo = Math.max(1, numSeguro(prestamo.plazo_semanas, 1));
+  const tasaGlobal = numSeguro(prestamo.tasa_interes_aplicada);
+  const saldo = numSeguro(prestamo.saldo_pendiente);
+  const totalOriginal = numSeguro(prestamo.monto_total_pagar, capital);
   const pagadoAcumulado = Number((totalOriginal - saldo).toFixed(2));
   const semUsadas = semanasTranscurridas(prestamo.fecha_desembolso, plazo, refDate);
-  const tasaMensual = plazo > 0 ? tasaGlobal / (plazo / SEMANAS_POR_MES) : tasaGlobal;
+  const tasaMensual = tasaGlobal / (plazo / SEMANAS_POR_MES);
   const tasaAjustada = Number((tasaMensual * (semUsadas / SEMANAS_POR_MES)).toFixed(4));
   const interesAjustado = Number((capital * tasaAjustada).toFixed(2));
   const totalAjustado = Number((capital + interesAjustado).toFixed(2));
-  const montoLiquidacion = Math.max(0, Number((totalAjustado - pagadoAcumulado).toFixed(2)));
+  let montoLiquidacion = Math.max(0, Number((totalAjustado - pagadoAcumulado).toFixed(2)));
+  if (!Number.isFinite(montoLiquidacion) || montoLiquidacion <= 0) {
+    montoLiquidacion = Math.max(0, saldo);
+  }
   const descuentoInteres = Math.max(0, Number((saldo - montoLiquidacion).toFixed(2)));
   return {
     capital,

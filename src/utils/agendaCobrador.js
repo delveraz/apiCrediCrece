@@ -5,6 +5,7 @@ const {
   esCuotaDiaDesembolso,
   fechaCalendarioISO,
 } = require('./diasCobro');
+const { rangoDiaLocal } = require('./fechasSql');
 
 const MAPA = ['DOMINGO', 'LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES', 'SABADO'];
 
@@ -35,9 +36,7 @@ function esVisitaCobrada(estado) {
 }
 
 function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gestiones_hoy, cobradorId = null) {
-  const pagosRuta = cobradorId
-    ? pagos_hoy.filter((pg) => pg.cobrador_id === cobradorId)
-    : pagos_hoy;
+  const pagosRuta = pagos_hoy;
   const gestionesRuta = cobradorId
     ? gestiones_hoy.filter((g) => g.cobrador_id === cobradorId)
     : gestiones_hoy;
@@ -212,21 +211,22 @@ async function cargarDatosCobrador(query, cobradorId, fechaISO) {
         [...prestamoIds, hoy]
       );
     }
+    const { inicio: diaIni, fin: diaFin } = rangoDiaLocal(hoy);
     pagos_hoy = await query(
       `SELECT pg.*, p.cliente_id
        FROM Pagos pg
        INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-       WHERE DATE(pg.fecha_pago) = DATE(?) AND pg.deleted_at IS NULL
+       WHERE pg.fecha_pago >= ? AND pg.fecha_pago < ? AND pg.deleted_at IS NULL
          AND p.cliente_id IN (${ph2})`,
-      [hoy, ...clienteIds]
+      [diaIni, diaFin, ...clienteIds]
     );
     gestiones_hoy = await query(
       `SELECT g.*, p.cliente_id
        FROM Gestiones_No_Pago g
        INNER JOIN Prestamos p ON g.prestamo_id = p.id
-       WHERE DATE(g.fecha_gestion) = DATE(?) AND g.deleted_at IS NULL
+       WHERE g.fecha_gestion >= ? AND g.fecha_gestion < ? AND g.deleted_at IS NULL
          AND p.cliente_id IN (${ph2})`,
-      [hoy, ...clienteIds]
+      [diaIni, diaFin, ...clienteIds]
     );
 
     const prestamoIdsPagos = [
@@ -296,21 +296,22 @@ async function cargarDatosTodosCobradores(query, cobradorIds, fechaISO) {
       );
     }
 
+    const { inicio: diaIni, fin: diaFin } = rangoDiaLocal(hoy);
     pagos_hoy = await query(
       `SELECT pg.*, p.cliente_id
        FROM Pagos pg
        INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-       WHERE DATE(pg.fecha_pago) = DATE(?) AND pg.deleted_at IS NULL
+       WHERE pg.fecha_pago >= ? AND pg.fecha_pago < ? AND pg.deleted_at IS NULL
          AND p.cliente_id IN (${ph2})`,
-      [hoy, ...clienteIds]
+      [diaIni, diaFin, ...clienteIds]
     );
     gestiones_hoy = await query(
       `SELECT g.*, p.cliente_id
        FROM Gestiones_No_Pago g
        INNER JOIN Prestamos p ON g.prestamo_id = p.id
-       WHERE DATE(g.fecha_gestion) = DATE(?) AND g.deleted_at IS NULL
+       WHERE g.fecha_gestion >= ? AND g.fecha_gestion < ? AND g.deleted_at IS NULL
          AND p.cliente_id IN (${ph2})`,
-      [hoy, ...clienteIds]
+      [diaIni, diaFin, ...clienteIds]
     );
 
     const prestamoPorId = new Map(prestamos.map((p) => [p.id, p]));

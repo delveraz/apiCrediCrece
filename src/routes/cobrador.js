@@ -134,11 +134,10 @@ async function rutaDiaria(req, res) {
                 pg.operador_id
          FROM Pagos pg
          INNER JOIN Prestamos p ON pg.prestamo_id = p.id
-         WHERE pg.cobrador_id = ?
-           AND pg.fecha_pago >= ? AND pg.fecha_pago < ?
+         WHERE pg.fecha_pago >= ? AND pg.fecha_pago < ?
            AND pg.deleted_at IS NULL
            AND p.cliente_id IN (${ph2})`,
-        [cobradorId, diaIni, diaFin, ...clienteIds]
+        [diaIni, diaFin, ...clienteIds]
       );
       gestiones_hoy = await query(
         `SELECT g.*, p.cliente_id
@@ -166,7 +165,10 @@ async function rutaDiaria(req, res) {
         `SELECT * FROM Prestamos WHERE id IN (${phP}) AND deleted_at IS NULL`,
         prestamoIdsPagos
       );
-      for (const p of extraPrestamos) prestamoPorId.set(p.id, p);
+      for (const p of extraPrestamos) {
+        prestamoPorId.set(p.id, p);
+        if (!prestamos.some((x) => x.id === p.id)) prestamos.push(p);
+      }
     }
 
     const pushAgendaItem = (c, p, cuotaPend, extra = {}) => {

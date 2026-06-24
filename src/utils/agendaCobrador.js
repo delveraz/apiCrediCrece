@@ -55,12 +55,43 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
   const pushAgendaItem = (c, p, cuotaPend, extra = {}) => {
     if (!p?.id || prestamosEnAgenda.has(p.id)) return;
     prestamosEnAgenda.add(p.id);
+    const pg = pagoPorPrestamo.get(p.id);
     const montoDia = cuotaPend
       ? Number(cuotaPend.monto_programado) - Number(cuotaPend.monto_pagado || 0)
       : montoVisitaHoy(p.cuota_semanal_base, p.dias_de_cobro);
+
+    const esLiquidacion =
+      extra.tipo_visita === 'liquidado' ||
+      (!!pg && (p.estado === 'Pagado' || Number(p.saldo_pendiente || 0) <= 0.01));
+
+    const estado_visita =
+      extra.estado_visita ??
+      (pg
+        ? estadoVisitaDesdePago(pg)
+        : gestionPorPrestamo.has(p.id)
+          ? 'no_pago'
+          : 'pendiente');
+
+    let tipo_visita = extra.tipo_visita || 'activo';
+    if (esLiquidacion) tipo_visita = 'liquidado';
+    else if (pg && esVisitaCobrada(estado_visita)) tipo_visita = 'cobrado';
+
+    const monto_cobrado = pg ? Number(pg.monto_pagado || 0) : null;
+    let monto_programado = extra.monto_programado ?? montoDia;
+    if (pg && (esLiquidacion || esVisitaCobrada(estado_visita))) {
+      monto_programado = monto_cobrado ?? monto_programado;
+    }
+
+    let etiqueta_visita = extra.etiqueta_visita ?? null;
+    if (!etiqueta_visita && pg) {
+      if (esLiquidacion) etiqueta_visita = 'Liquidación anticipada';
+      else if (Number(pg.registrado_por_admin) === 1) etiqueta_visita = 'Cobrado por administrador';
+    }
+
     agenda.push({
       prestamo_id: p.id,
-      monto_programado: extra.monto_programado ?? montoDia,
+      monto_programado,
+      monto_cobrado,
       cliente_id: c.id,
       nombre_completo: c.nombre_completo,
       telefono: c.telefono,
@@ -68,26 +99,16 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
       cedula: c.cedula,
       orden_visita: c.orden_visita,
       saldo_pendiente: p.saldo_pendiente,
-      tipo_visita: extra.tipo_visita || 'activo',
-      estado_visita:
-        extra.estado_visita ??
-        (pagoPorPrestamo.has(p.id)
-          ? estadoVisitaDesdePago(pagoPorPrestamo.get(p.id))
-          : gestionPorPrestamo.has(p.id)
-            ? 'no_pago'
-            : 'pendiente'),
-      pago_hoy_id: extra.pago_hoy_id ?? pagoPorPrestamo.get(p.id)?.id ?? null,
+      tipo_visita,
+      estado_visita,
+      pago_hoy_id: extra.pago_hoy_id ?? pg?.id ?? null,
       motivo_no_pago: gestionPorPrestamo.get(p.id)?.motivo ?? null,
-      etiqueta_visita:
-        extra.etiqueta_visita ??
-        (pagoPorPrestamo.has(p.id) && Number(pagoPorPrestamo.get(p.id).registrado_por_admin) === 1
-          ? 'Cobrado por administrador'
-          : null),
+      etiqueta_visita,
     });
   };
 
   for (const c of clientes) {
-    const p = prestamos.find((x) => x.cliente_id === c.id);
+    const p = prestamos.find((x) => x.cliente_id === c.id && x.estado === 'Activo');
     if (p && debeSugerirCobroEnFecha(hoy, p)) {
       const cuotaPend = cuotas.find(
         (cc) => cc.prestamo_id === p.id && !esCuotaDiaDesembolso(cc, p)
@@ -103,9 +124,13 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
       const ev = estadoVisitaDesdePago(pg);
       pushAgendaItem(c, pr, null, {
         monto_programado: Number(pg.monto_pagado),
+        monto_cobrado: Number(pg.monto_pagado),
         tipo_visita: esLiquidacion ? 'liquidado' : 'cobrado',
-        etiqueta_visita:
-          esLiquidacion ? 'Liquidacion' : ev === 'cobrado_admin' ? 'Cobrado por administrador' : 'Cobro registrado',
+        etiqueta_visita: esLiquidacion
+          ? 'Liquidación anticipada'
+          : ev === 'cobrado_admin'
+            ? 'Cobrado por administrador'
+            : null,
         estado_visita: ev,
         pago_hoy_id: pg.id,
       });
@@ -119,6 +144,7 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
   });
 
   const cobrado = agenda.filter((v) => esVisitaCobrada(v.estado_visita)).length;
+  const liquidado = agenda.filter((v) => v.tipo_visita === 'liquidado').length;
   const no_pago = agenda.filter((v) => v.estado_visita === 'no_pago').length;
   const pendiente = agenda.filter((v) => v.estado_visita === 'pendiente').length;
   const total = agenda.length;
@@ -130,6 +156,7 @@ function armarAgendaDesdeDatos(hoy, clientes, prestamos, cuotas, pagos_hoy, gest
     resumen: {
       total_visitas: total,
       cobrado,
+      liquidado,
       no_pago,
       pendiente,
       visitadas,
@@ -374,6 +401,7 @@ async function buildCumplimientoBatch(query, cobradores, fechaISO, { incluirVisi
 
 function resumirAgenda(agenda, pagos_hoy = []) {
   const cobrado = agenda.filter((v) => esVisitaCobrada(v.estado_visita)).length;
+  const liquidado = agenda.filter((v) => v.tipo_visita === 'liquidado').length;
   const no_pago = agenda.filter((v) => v.estado_visita === 'no_pago').length;
   const pendiente = agenda.filter((v) => v.estado_visita === 'pendiente').length;
   const total = agenda.length;
@@ -382,6 +410,7 @@ function resumirAgenda(agenda, pagos_hoy = []) {
   return {
     total_visitas: total,
     cobrado,
+    liquidado,
     no_pago,
     pendiente,
     visitadas,

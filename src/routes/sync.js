@@ -119,12 +119,23 @@ async function pushGestiones(req, res) {
 
 async function healthCheck(req, res) {
   const cfg = checkDbConfig();
+  const lite = req.query.lite === '1' || req.query.lite === 'true';
   if (!cfg.ok) {
     return res.status(503).json({
       success: false,
       tidb: 'misconfigured',
       missing: cfg.missing,
       hint: 'En Vercel: Settings → Environment Variables. Copie DB_HOST, DB_USER, DB_PASSWORD, DB_NAME y DB_SSL=true desde su .env local.',
+      time: new Date().toISOString(),
+    });
+  }
+  if (lite) {
+    return res.json({
+      success: true,
+      tidb: 'skipped',
+      lite: true,
+      host: cfg.hostPreview,
+      ssl: cfg.ssl,
       time: new Date().toISOString(),
     });
   }

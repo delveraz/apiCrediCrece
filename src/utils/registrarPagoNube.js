@@ -99,7 +99,13 @@ async function registrarPagoEnNube(conn, opts) {
   let montoEfectivo = Number(montoInput);
 
   if (esLiquidacion) {
-    const liq = calcularLiquidacionAnticipada(prestamo);
+    const [pagadoRows] = await conn.execute(
+      `SELECT COALESCE(SUM(monto_pagado), 0) AS total FROM Pagos
+       WHERE prestamo_id = ? AND deleted_at IS NULL`,
+      [prestamoId]
+    );
+    const pagadoAcumulado = Number(pagadoRows[0]?.total || 0);
+    const liq = calcularLiquidacionAnticipada(prestamo, new Date(), { pagadoAcumulado });
     montoEfectivo = Number(liq.montoLiquidacion);
     if (!Number.isFinite(montoEfectivo) || montoEfectivo <= 0) {
       throw new Error('Este prestamo ya esta liquidado o sin saldo.');

@@ -1,5 +1,7 @@
 /** Misma lógica que app-financiera/src/utils/finanzas.js (motor nube / carga masiva) */
 
+const { toFechaISO } = require('./zonaHoraria');
+
 const SEMANAS_POR_MES = 4;
 const TASA_MENSUAL_DEFAULT = 0.1;
 
@@ -120,23 +122,85 @@ const semanasTranscurridas = (fechaDesembolsoISO, plazoSemanas, refDate = new Da
   return Math.min(plazo, sem);
 };
 
-const calcularLiquidacionAnticipada = (prestamo, refDate = new Date()) => {
+const parseDiasCobro = (valor) => {
+  if (!valor) return ['LUNES'];
+  try {
+    const raw = typeof valor === 'string' ? JSON.parse(valor) : valor;
+    if (!Array.isArray(raw) || !raw.length) return ['LUNES'];
+    return raw.map((d) => String(d).toUpperCase());
+  } catch {
+    return ['LUNES'];
+  }
+};
+
+const fechaVencimientoCredito = (fechaDesembolso, plazoSemanas, diasDeCobro) => {
+  const inicio = normalizarFechaDesembolso(fechaDesembolso);
+  if (!inicio) return null;
+  const agenda = generarAgendaDeCobro(inicio, plazoSemanas, parseDiasCobro(diasDeCobro), 0);
+  if (!agenda.length) return inicio;
+  return agenda[agenda.length - 1].fecha_programada;
+};
+
+const prestamoEstaVencido = (prestamo, refDate = new Date()) => {
+  const vencimiento = fechaVencimientoCredito(
+    prestamo?.fecha_desembolso,
+    prestamo?.plazo_semanas,
+    prestamo?.dias_de_cobro
+  );
+  if (!vencimiento) return false;
+  return toFechaISO(refDate) >= vencimiento;
+};
+
+const calcularLiquidacionAnticipada = (prestamo, refDate = new Date(), opts = {}) => {
   const capital = numSeguro(prestamo.monto_desembolsado);
   const plazo = Math.max(1, numSeguro(prestamo.plazo_semanas, 1));
   const tasaGlobal = numSeguro(prestamo.tasa_interes_aplicada);
   const saldo = numSeguro(prestamo.saldo_pendiente);
   const totalOriginal = numSeguro(prestamo.monto_total_pagar, capital);
-  const pagadoAcumulado = Number((totalOriginal - saldo).toFixed(2));
-  const semUsadas = semanasTranscurridas(prestamo.fecha_desembolso, plazo, refDate);
+  const pagadoAcumulado =
+    opts.pagadoAcumulado != null
+      ? numSeguro(opts.pagadoAcumulado)
+      : Number((totalOriginal - saldo).toFixed(2));
+  const saldoContrato = Math.max(0, Number((totalOriginal - pagadoAcumulado).toFixed(2)));
   const tasaMensual = tasaGlobal / (plazo / SEMANAS_POR_MES);
+  const interesOriginal = Number((capital * tasaGlobal).toFixed(2));
+  const vencimiento = fechaVencimientoCredito(
+    prestamo.fecha_desembolso,
+    plazo,
+    parseDiasCobro(prestamo.dias_de_cobro)
+  );
+  const vencido = prestamoEstaVencido(prestamo, refDate);
+
+  if (vencido) {
+    let montoLiquidacion = saldoContrato;
+    if (!Number.isFinite(montoLiquidacion) || montoLiquidacion <= 0) {
+      montoLiquidacion = Math.max(0, saldo);
+    }
+    return {
+      capital,
+      plazoSemanas: plazo,
+      semanasUsadas: plazo,
+      montoLiquidacion,
+      descuentoInteres: 0,
+      saldoActual: saldo,
+      saldoContrato,
+      pagadoAcumulado,
+      esAnticipado: false,
+      vencido: true,
+      fechaVencimiento: vencimiento,
+      mensaje: `Crédito vencido (última visita ${vencimiento || '—'}): se cobra saldo con interés completo del contrato.`,
+    };
+  }
+
+  const semUsadas = semanasTranscurridas(prestamo.fecha_desembolso, plazo, refDate);
   const tasaAjustada = Number((tasaMensual * (semUsadas / SEMANAS_POR_MES)).toFixed(4));
   const interesAjustado = Number((capital * tasaAjustada).toFixed(2));
   const totalAjustado = Number((capital + interesAjustado).toFixed(2));
   let montoLiquidacion = Math.max(0, Number((totalAjustado - pagadoAcumulado).toFixed(2)));
   if (!Number.isFinite(montoLiquidacion) || montoLiquidacion <= 0) {
-    montoLiquidacion = Math.max(0, saldo);
+    montoLiquidacion = Math.max(0, saldoContrato, saldo);
   }
-  const descuentoInteres = Math.max(0, Number((saldo - montoLiquidacion).toFixed(2)));
+  const descuentoInteres = Math.max(0, Number((saldoContrato - montoLiquidacion).toFixed(2)));
   return {
     capital,
     plazoSemanas: plazo,
@@ -144,7 +208,15 @@ const calcularLiquidacionAnticipada = (prestamo, refDate = new Date()) => {
     montoLiquidacion,
     descuentoInteres,
     saldoActual: saldo,
-    mensaje: `Interés recalculado por ${semUsadas} semana(s). Ahorro: C$ ${descuentoInteres.toFixed(2)}`,
+    saldoContrato,
+    pagadoAcumulado,
+    esAnticipado: true,
+    vencido: false,
+    fechaVencimiento: vencimiento,
+    mensaje:
+      descuentoInteres > 0
+        ? `Liquidación anticipada: interés por ${semUsadas} semana(s). Ahorro: C$ ${descuentoInteres.toFixed(2)}`
+        : `Liquidación anticipada: interés por ${semUsadas} semana(s).`,
   };
 };
 
@@ -155,4 +227,6 @@ module.exports = {
   calcularCuotaYDistribucion,
   generarAgendaDeCobro,
   calcularLiquidacionAnticipada,
+  fechaVencimientoCredito,
+  prestamoEstaVencido,
 };

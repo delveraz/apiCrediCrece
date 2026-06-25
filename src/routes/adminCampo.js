@@ -173,6 +173,12 @@ async function getResumenCobroCampo(req, res) {
          WHERE prestamo_id = ? AND deleted_at IS NULL`,
         [prestamoId]
       );
+      const [pagadoRows] = await conn.execute(
+        `SELECT COALESCE(SUM(monto_pagado), 0) AS total FROM Pagos
+         WHERE prestamo_id = ? AND deleted_at IS NULL`,
+        [prestamoId]
+      );
+      const pagadoAcumulado = Number(pagadoRows[0]?.total || 0);
       return res.json({
         success: true,
         data: {
@@ -180,7 +186,7 @@ async function getResumenCobroCampo(req, res) {
           cuotaDia,
           cuotasPendientes: pend[0]?.n || 0,
           ultima_fecha_cuota: ultimaCuota[0]?.ultima_fecha_cuota || null,
-          liquidacion: calcularLiquidacionAnticipada(prestamo),
+          liquidacion: calcularLiquidacionAnticipada(prestamo, new Date(), { pagadoAcumulado }),
         },
       });
     } finally {

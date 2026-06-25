@@ -233,18 +233,13 @@ function resolverCobrador(fila, mapa) {
   return null;
 }
 
-function calcularPreview(fila) {
+function resolverImportacionFinanciera(fila) {
   const fin = calcularCuotaYDistribucion(
     fila.monto_desembolsado,
     fila.plazo_semanas,
     fila.dias_de_cobro,
     fila.tasa_mensual
   );
-  let saldo = fila.saldo_pendiente;
-  if (saldo == null || saldo <= 0) saldo = fin.montoTotalPagar;
-  if (saldo > fin.montoTotalPagar + 0.02) {
-    return { error: `saldo_pendiente (${saldo}) mayor que total a pagar (${fin.montoTotalPagar})` };
-  }
   const agenda = generarAgendaDeCobro(
     fila.fecha_desembolso,
     fila.plazo_semanas,
@@ -252,21 +247,44 @@ function calcularPreview(fila) {
     fin.cuotaPorDiaDeCobro
   );
   const cuotasPorSemana = fila.dias_de_cobro.length || 1;
-  const cuotasAPagar = Math.min(
-    agenda.length,
-    Math.max(0, fila.semanas_pagadas) * cuotasPorSemana
-  );
+
+  let cuotasAPagar;
+  let saldo;
+
+  if (fila.semanas_pagadas > 0) {
+    cuotasAPagar = Math.min(agenda.length, Math.max(0, fila.semanas_pagadas) * cuotasPorSemana);
+    const montoPagadoVirtual = Number((cuotasAPagar * fin.cuotaPorDiaDeCobro).toFixed(2));
+    saldo = Math.max(0, Number((fin.montoTotalPagar - montoPagadoVirtual).toFixed(2)));
+  } else if (fila.saldo_pendiente != null && fila.saldo_pendiente >= 0) {
+    saldo = Number(Math.min(Math.max(0, fila.saldo_pendiente), fin.montoTotalPagar).toFixed(2));
+    const pagadoEst = Number((fin.montoTotalPagar - saldo).toFixed(2));
+    cuotasAPagar = Math.min(
+      agenda.length,
+      Math.max(0, Math.round(pagadoEst / fin.cuotaPorDiaDeCobro))
+    );
+  } else {
+    saldo = fin.montoTotalPagar;
+    cuotasAPagar = 0;
+  }
+
+  return { fin, agenda, cuotasAPagar, saldo_pendiente: saldo };
+}
+
+function calcularPreview(fila) {
+  const { fin, agenda, cuotasAPagar, saldo_pendiente: saldo } = resolverImportacionFinanciera(fila);
+
+  if (saldo > fin.montoTotalPagar + 0.02) {
+    return { error: `saldo_pendiente (${saldo}) mayor que total a pagar (${fin.montoTotalPagar})` };
+  }
   if (
     fila.semanas_pagadas > 0 &&
     fila.saldo_pendiente != null &&
     fila.saldo_pendiente > 0
   ) {
-    const montoPagadoEst = cuotasAPagar * fin.cuotaPorDiaDeCobro;
-    const saldoEsperado = Math.max(0, Number((fin.montoTotalPagar - montoPagadoEst).toFixed(2)));
-    const diff = Math.abs(saldo - saldoEsperado);
+    const diff = Math.abs(saldo - fila.saldo_pendiente);
     if (diff > fin.cuotaPorDiaDeCobro * 1.5 && diff > fin.montoTotalPagar * 0.08) {
       return {
-        error: `saldo_pendiente (${saldo}) no cuadra con semanas_pagadas (${fila.semanas_pagadas}); esperado ~${saldoEsperado}`,
+        error: `saldo_pendiente (${fila.saldo_pendiente}) no cuadra con semanas_pagadas (${fila.semanas_pagadas}); use semanas_pagadas o corrija saldo (esperado ~${saldo})`,
       };
     }
   }
@@ -275,7 +293,7 @@ function calcularPreview(fila) {
   }
   return {
     ...fin,
-    saldo_pendiente: Number(saldo.toFixed(2)),
+    saldo_pendiente: saldo,
     cuotas_agenda: agenda.length,
     cuotas_marcar_pagadas: cuotasAPagar,
   };
@@ -419,16 +437,8 @@ async function insertarCuotasBulk(conn, cuotasRows) {
 }
 
 async function importarUnaFila(conn, fila, ctx) {
-  const fin = calcularCuotaYDistribucion(
-    fila.monto_desembolsado,
-    fila.plazo_semanas,
-    fila.dias_de_cobro,
-    fila.tasa_mensual
-  );
-
-  let saldo = fila.saldo_pendiente;
-  if (saldo == null || saldo <= 0) saldo = fin.montoTotalPagar;
-  saldo = Number(Math.min(saldo, fin.montoTotalPagar).toFixed(2));
+  const { fin, agenda, cuotasAPagar: pagarHasta, saldo_pendiente: saldo } =
+    resolverImportacionFinanciera(fila);
 
   let clienteId = ctx.cedulaMap.get(fila.cedula);
   let clienteNuevo = false;
@@ -518,17 +528,9 @@ async function importarUnaFila(conn, fila, ctx) {
     ]
   );
 
-  const agenda = generarAgendaDeCobro(
-    fila.fecha_desembolso,
-    fila.plazo_semanas,
-    fila.dias_de_cobro,
-    fin.cuotaPorDiaDeCobro
-  );
-  const cuotasPorSemana = fila.dias_de_cobro.length || 1;
-  const pagarHasta = Math.min(agenda.length, Math.max(0, fila.semanas_pagadas) * cuotasPorSemana);
-
-  for (let i = 0; i < agenda.length; i += 1) {
-    const c = agenda[i];
+  const agendaCuotas = agenda;
+  for (let i = 0; i < agendaCuotas.length; i += 1) {
+    const c = agendaCuotas[i];
     const pagada = i < pagarHasta;
     ctx.cuotasBuffer.push({
       id: uuidv4(),
@@ -689,6 +691,8 @@ module.exports = {
   normalizarFila,
   validarFilas,
   importarFilas,
+  resolverImportacionFinanciera,
+  calcularPreview,
   PLANTILLA_COLUMNAS: [
     'cedula',
     'primer_nombre',

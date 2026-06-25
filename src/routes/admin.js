@@ -31,8 +31,9 @@ const { normalizarCedula, validarCedula } = require('../utils/cedulaNic');
 const { datosWhatsAppCliente } = require('../utils/whatsappCliente');
 const { aplicarProrrogaEnNube } = require('../utils/prorrogasNube');
 const { aplicarMontoACuotas, revertirMontoDeCuotas } = require('../utils/registrarPagoNube');
-const { rangoDiaLocal } = require('../utils/fechasSql');
+const { rangoDiaLocal, rangoPeriodoLocal } = require('../utils/fechasSql');
 const { hoyISO } = require('../utils/zonaHoraria');
+const { armarReporteVencidos } = require('../utils/reporteVencidos');
 const { generarRespaldoSql } = require('../utils/respaldoSql');
 
 const txt = (v) => {
@@ -1277,18 +1278,19 @@ async function getReporte(req, res) {
         });
       }
       case 'recuperacion': {
+        const { inicio, fin } = rangoPeriodoLocal(desde, hasta);
         const resumen = await query(
           `SELECT COUNT(DISTINCT id) AS pagos_recibidos,
                   COALESCE(SUM(monto_pagado),0) AS monto_recuperado
-           FROM Pagos WHERE deleted_at IS NULL AND DATE(fecha_pago) BETWEEN ? AND ?`,
-          [desde, hasta]
+           FROM Pagos WHERE deleted_at IS NULL AND fecha_pago >= ? AND fecha_pago < ?`,
+          [inicio, fin]
         );
         const detallePorCobrador = await query(
           `SELECT u.nombre_completo AS cobrador, COUNT(p.id) AS pagos, COALESCE(SUM(p.monto_pagado),0) AS monto
            FROM Pagos p JOIN Usuarios u ON p.cobrador_id = u.id
-           WHERE p.deleted_at IS NULL AND DATE(p.fecha_pago) BETWEEN ? AND ?
+           WHERE p.deleted_at IS NULL AND p.fecha_pago >= ? AND p.fecha_pago < ?
            GROUP BY u.id, u.nombre_completo ORDER BY monto DESC`,
-          [desde, hasta]
+          [inicio, fin]
         );
         return res.json({
           success: true,
@@ -1313,6 +1315,7 @@ async function getReporte(req, res) {
         });
       }
       case 'riesgo': {
+        const hoy = hoyISO();
         const saldos = await query(
           `SELECT c.id AS codigo_cliente, c.nombre_completo, c.cedula,
                   p.id AS prestamo_id, p.saldo_pendiente,
@@ -1321,9 +1324,10 @@ async function getReporte(req, res) {
            FROM Clientes c
            JOIN Prestamos p ON c.id = p.cliente_id
            LEFT JOIN Cuotas_Calendario cc ON p.id = cc.prestamo_id
-             AND cc.estado = 'Programada' AND cc.fecha_programada < CURDATE()
+             AND cc.estado = 'Programada' AND DATE(cc.fecha_programada) < DATE(?)
            WHERE p.estado = 'Activo' AND p.deleted_at IS NULL
-           GROUP BY c.id, c.nombre_completo, c.cedula, p.id, p.saldo_pendiente, p.cuota_semanal_base, p.estado`
+           GROUP BY c.id, c.nombre_completo, c.cedula, p.id, p.saldo_pendiente, p.cuota_semanal_base, p.estado`,
+          [hoy]
         );
         const riesgoAlto = saldos.filter((s) => s.cuotas_vencidas > 2);
         const riesgoMedio = saldos.filter((s) => s.cuotas_vencidas >= 1 && s.cuotas_vencidas <= 2);
@@ -1344,6 +1348,7 @@ async function getReporte(req, res) {
         });
       }
       case 'cobradores': {
+        const { inicio, fin } = rangoPeriodoLocal(desde, hasta);
         const filas = await query(
           `SELECT u.nombre_completo AS cobrador,
                   COUNT(DISTINCT p.id) AS pagos,
@@ -1351,11 +1356,11 @@ async function getReporte(req, res) {
                   COUNT(DISTINCT g.id) AS gestiones_no_pago
            FROM Usuarios u
            JOIN Roles r ON u.rol_id = r.id
-           LEFT JOIN Pagos p ON p.cobrador_id = u.id AND p.deleted_at IS NULL AND DATE(p.fecha_pago) BETWEEN ? AND ?
-           LEFT JOIN Gestiones_No_Pago g ON g.cobrador_id = u.id AND DATE(g.fecha_gestion) BETWEEN ? AND ?
+           LEFT JOIN Pagos p ON p.cobrador_id = u.id AND p.deleted_at IS NULL AND p.fecha_pago >= ? AND p.fecha_pago < ?
+           LEFT JOIN Gestiones_No_Pago g ON g.cobrador_id = u.id AND g.fecha_gestion >= ? AND g.fecha_gestion < ?
            WHERE r.nombre = 'COBRADOR' AND u.deleted_at IS NULL
            GROUP BY u.id, u.nombre_completo ORDER BY monto_cobrado DESC`,
-          [desde, hasta, desde, hasta]
+          [inicio, fin, inicio, fin]
         );
         return res.json({
           success: true,
@@ -1363,15 +1368,16 @@ async function getReporte(req, res) {
         });
       }
       case 'liquidaciones': {
+        const { inicio, fin } = rangoPeriodoLocal(desde, hasta);
         const filas = await query(
           `SELECT c.id AS codigo_cliente, c.nombre_completo, c.cedula,
                   p.id AS prestamo_id, p.fecha_desembolso, p.monto_desembolsado,
                   p.monto_total_pagar, p.updated_at AS fecha_liquidacion
            FROM Prestamos p JOIN Clientes c ON p.cliente_id = c.id
            WHERE p.estado = 'Pagado' AND p.deleted_at IS NULL
-             AND DATE(p.updated_at) BETWEEN ? AND ?
+             AND p.updated_at >= ? AND p.updated_at < ?
            ORDER BY p.updated_at DESC`,
-          [desde, hasta]
+          [inicio, fin]
         );
         return res.json({
           success: true,
@@ -1379,18 +1385,19 @@ async function getReporte(req, res) {
         });
       }
       case 'gestiones': {
+        const { inicio, fin } = rangoPeriodoLocal(desde, hasta);
         const resumen = await query(
           `SELECT COUNT(*) AS total, COUNT(DISTINCT prestamo_id) AS prestamos_afectados
            FROM Gestiones_No_Pago
-           WHERE deleted_at IS NULL AND DATE(fecha_gestion) BETWEEN ? AND ?`,
-          [desde, hasta]
+           WHERE deleted_at IS NULL AND fecha_gestion >= ? AND fecha_gestion < ?`,
+          [inicio, fin]
         );
         const porMotivo = await query(
           `SELECT motivo, COUNT(*) AS cantidad
            FROM Gestiones_No_Pago
-           WHERE deleted_at IS NULL AND DATE(fecha_gestion) BETWEEN ? AND ?
+           WHERE deleted_at IS NULL AND fecha_gestion >= ? AND fecha_gestion < ?
            GROUP BY motivo ORDER BY cantidad DESC`,
-          [desde, hasta]
+          [inicio, fin]
         );
         return res.json({
           success: true,
@@ -1398,6 +1405,7 @@ async function getReporte(req, res) {
         });
       }
       case 'clientes-nuevos': {
+        const { inicio, fin } = rangoPeriodoLocal(desde, hasta);
         const filas = await query(
           `SELECT c.id AS codigo_cliente, c.nombre_completo, c.cedula, c.telefono,
                   c.direccion, COALESCE(u.nombre_completo, 'Sin asignar') AS cobrador,
@@ -1405,14 +1413,18 @@ async function getReporte(req, res) {
            FROM Clientes c
            LEFT JOIN Usuarios u ON c.cobrador_id = u.id
            WHERE c.deleted_at IS NULL
-             AND DATE(COALESCE(c.created_at, c.updated_at)) BETWEEN ? AND ?
+             AND COALESCE(c.created_at, c.updated_at) >= ? AND COALESCE(c.created_at, c.updated_at) < ?
            ORDER BY COALESCE(c.created_at, c.updated_at) DESC`,
-          [desde, hasta]
+          [inicio, fin]
         );
         return res.json({
           success: true,
           data: { tipo: 'CLIENTES NUEVOS', periodo: { desde, hasta }, filas, cantidad: filas.length, timestamp: ts },
         });
+      }
+      case 'vencidos': {
+        const data = await armarReporteVencidos();
+        return res.json({ success: true, data });
       }
       case 'arqueo': {
         const resumen = await query(

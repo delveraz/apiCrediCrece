@@ -56,4 +56,11 @@ function rangoDiaNicaragua(fechaISO) {
   return { inicio, fin };
 }
 
-module.exports = { ZONA_NICARAGUA, fechaEnZona, hoyISO, toFechaISO, rangoDiaNicaragua };
+/** Rango [inicio, fin) para filtrar fecha_pago entre dos días calendario Nicaragua. */
+function rangoPeriodoNicaragua(desdeISO, hastaISO) {
+  const { inicio } = rangoDiaNicaragua(toFechaISO(desdeISO));
+  const { fin } = rangoDiaNicaragua(toFechaISO(hastaISO));
+  return { inicio, fin };
+}
+
+module.exports = { ZONA_NICARAGUA, fechaEnZona, hoyISO, toFechaISO, rangoDiaNicaragua, rangoPeriodoNicaragua };

@@ -19,6 +19,7 @@ const { hoyISO } = require('../utils/zonaHoraria');
 const { ensureRutaForCobrador, sincronizarRutaClienteAsignado } = require('../utils/rutas');
 const { exigirUsuarioActivo, responderErrorUsuario } = require('../utils/assertUsuarioActivo');
 const { aplicarMontoACuotas } = require('../utils/registrarPagoNube');
+const { calcularLiquidacionAnticipada } = require('../utils/finanzasNube');
 const { aplicarProrrogaEnNube } = require('../utils/prorrogasNube');
 
 /**
@@ -762,7 +763,7 @@ async function pushSync(req, res) {
         }
 
         const [prestamoOk] = await conn.execute(
-          'SELECT id, saldo_pendiente, monto_total_pagar FROM Prestamos WHERE id = ? AND deleted_at IS NULL LIMIT 1',
+          'SELECT * FROM Prestamos WHERE id = ? AND deleted_at IS NULL LIMIT 1',
           [p.prestamo_id]
         );
         if (!prestamoOk.length) {
@@ -795,7 +796,19 @@ async function pushSync(req, res) {
 
         const montoEfectivo = Number(p.monto_pagado);
         if (montoEfectivo <= 0) throw new Error('Monto invalido');
-        if (montoEfectivo > Number(prestamo.saldo_pendiente) + 0.01) {
+
+        const [pagadoRows] = await conn.execute(
+          `SELECT COALESCE(SUM(monto_pagado), 0) AS total FROM Pagos
+           WHERE prestamo_id = ? AND deleted_at IS NULL`,
+          [p.prestamo_id]
+        );
+        const pagadoAcumulado = Number(pagadoRows[0]?.total || 0);
+        const liq = calcularLiquidacionAnticipada(prestamo, new Date(p.fecha_pago || new Date()), {
+          pagadoAcumulado,
+        });
+        const esLiquidacion = Math.abs(montoEfectivo - liq.montoLiquidacion) < 0.02;
+
+        if (!esLiquidacion && montoEfectivo > Number(prestamo.saldo_pendiente) + 0.01) {
           throw new Error(
             `Monto supera saldo pendiente (C$ ${Number(prestamo.saldo_pendiente).toFixed(2)})`
           );
@@ -818,16 +831,40 @@ async function pushSync(req, res) {
           ]
         );
 
-        await aplicarMontoACuotas(conn, p.prestamo_id, montoEfectivo);
-        const nuevoSaldo = Math.max(
-          0,
-          Number((Number(prestamo.saldo_pendiente) - montoEfectivo).toFixed(2))
-        );
-        const estadoPrestamo = nuevoSaldo <= 0 ? 'Pagado' : 'Activo';
-        await conn.execute(
-          `UPDATE Prestamos SET saldo_pendiente = ?, estado = ?, updated_at = NOW(), is_synced = 1 WHERE id = ?`,
-          [nuevoSaldo, estadoPrestamo, p.prestamo_id]
-        );
+        if (esLiquidacion) {
+          await conn.execute(
+            `UPDATE Cuotas_Calendario SET monto_pagado = monto_programado, estado = 'Pagada', updated_at = NOW(), is_synced = 1
+             WHERE prestamo_id = ? AND estado IN ('Programada', 'Parcial') AND deleted_at IS NULL`,
+            [p.prestamo_id]
+          );
+          await conn.execute(
+            `UPDATE Prestamos SET saldo_pendiente = 0,
+              monto_total_pagar = ?,
+              estado = 'Pagado', updated_at = NOW(), is_synced = 1
+             WHERE id = ?`,
+            [
+              Number(
+                (
+                  Number(prestamo.monto_total_pagar) -
+                  Number(prestamo.saldo_pendiente) +
+                  montoEfectivo
+                ).toFixed(2)
+              ),
+              p.prestamo_id,
+            ]
+          );
+        } else {
+          await aplicarMontoACuotas(conn, p.prestamo_id, montoEfectivo);
+          const nuevoSaldo = Math.max(
+            0,
+            Number((Number(prestamo.saldo_pendiente) - montoEfectivo).toFixed(2))
+          );
+          const estadoPrestamo = nuevoSaldo <= 0 ? 'Pagado' : 'Activo';
+          await conn.execute(
+            `UPDATE Prestamos SET saldo_pendiente = ?, estado = ?, updated_at = NOW(), is_synced = 1 WHERE id = ?`,
+            [nuevoSaldo, estadoPrestamo, p.prestamo_id]
+          );
+        }
 
         synced.pagos.push(p.id);
         procesados++;

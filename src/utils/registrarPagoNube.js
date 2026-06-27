@@ -134,8 +134,10 @@ async function registrarPagoEnNube(conn, opts) {
 
   const pagoId = uuidv4();
   const fecha = new Date().toISOString();
-  const nuevoSaldo = Math.max(0, Number((Number(prestamo.saldo_pendiente) - montoEfectivo).toFixed(2)));
-  const estadoPrestamo = nuevoSaldo <= 0 ? 'Pagado' : 'Activo';
+  const nuevoSaldo = esLiquidacion
+    ? 0
+    : Math.max(0, Number((Number(prestamo.saldo_pendiente) - montoEfectivo).toFixed(2)));
+  const estadoPrestamo = esLiquidacion || nuevoSaldo <= 0 ? 'Pagado' : 'Activo';
 
   await conn.execute(
     `INSERT INTO Pagos (id, prestamo_id, cobrador_id, monto_pagado, fecha_pago, latitud, longitud,
@@ -144,7 +146,7 @@ async function registrarPagoEnNube(conn, opts) {
     [pagoId, prestamoId, cobradorRegistro, montoEfectivo, fecha, latitud, longitud, operadorId]
   );
 
-  if (esLiquidacion && nuevoSaldo <= 0) {
+  if (esLiquidacion) {
     await conn.execute(
       `UPDATE Cuotas_Calendario SET monto_pagado = monto_programado, estado = 'Pagada', updated_at = NOW(), is_synced = 1
        WHERE prestamo_id = ? AND estado IN ('Programada', 'Parcial') AND deleted_at IS NULL`,
@@ -176,7 +178,7 @@ async function registrarPagoEnNube(conn, opts) {
 
   return {
     pagoId,
-    saldoRestante: nuevoSaldo,
+    saldoRestante: esLiquidacion ? 0 : nuevoSaldo,
     montoAplicado: montoEfectivo,
     liquidacion: esLiquidacion,
     cobrador_id: cobradorRegistro,

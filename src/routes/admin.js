@@ -30,10 +30,12 @@ const {
 const { normalizarCedula, validarCedula } = require('../utils/cedulaNic');
 const { datosWhatsAppCliente } = require('../utils/whatsappCliente');
 const { aplicarProrrogaEnNube } = require('../utils/prorrogasNube');
+const { aplicarCastigoPerdidaEnNube } = require('../utils/castigoPerdidaNube');
+const { armarReportePerdidas } = require('../utils/reportePerdidas');
+const { armarReporteVencidos } = require('../utils/reporteVencidos');
 const { aplicarMontoACuotas, revertirMontoDeCuotas } = require('../utils/registrarPagoNube');
 const { rangoDiaLocal, rangoPeriodoLocal } = require('../utils/fechasSql');
 const { hoyISO } = require('../utils/zonaHoraria');
-const { armarReporteVencidos } = require('../utils/reporteVencidos');
 const { generarRespaldoSql } = require('../utils/respaldoSql');
 
 const txt = (v) => {
@@ -1426,6 +1428,10 @@ async function getReporte(req, res) {
         const data = await armarReporteVencidos();
         return res.json({ success: true, data });
       }
+      case 'perdidas': {
+        const data = await armarReportePerdidas(desde, hasta);
+        return res.json({ success: true, data });
+      }
       case 'arqueo': {
         const resumen = await query(
           `SELECT COUNT(*) AS cierres_registrados,
@@ -1791,6 +1797,25 @@ async function aplicarProrroga(req, res) {
   }
 }
 
+async function castigarPerdida(req, res) {
+  const conn = await getConnection();
+  try {
+    await conn.beginTransaction();
+    const resultado = await aplicarCastigoPerdidaEnNube(conn, {
+      prestamo_id: req.params.id || req.body.prestamo_id,
+      motivo: req.body.motivo,
+      operador_id: req.operadorId,
+    });
+    await conn.commit();
+    return res.json({ success: true, data: resultado });
+  } catch (e) {
+    await conn.rollback();
+    return res.status(400).json({ success: false, message: e.message });
+  } finally {
+    conn.release();
+  }
+}
+
 async function exportCarteraImportacion(req, res) {
   try {
     const cartera = await query(
@@ -1884,6 +1909,7 @@ module.exports = {
   listGarantiasPrestamo,
   agregarGarantiasPrestamo,
   aplicarProrroga,
+  castigarPerdida,
   exportCarteraImportacion,
   esIdClienteOficial,
   camposCliente,

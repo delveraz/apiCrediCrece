@@ -85,6 +85,27 @@ async function migrarTablasSync() {
     'ALTER TABLE Licencias_Codigos ADD COLUMN geo_region VARCHAR(80) DEFAULT NULL',
     'ALTER TABLE Licencias_Codigos ADD COLUMN geo_pais VARCHAR(80) DEFAULT NULL',
     'ALTER TABLE Licencias_Codigos ADD COLUMN geo_isp VARCHAR(80) DEFAULT NULL',
+    `CREATE TABLE IF NOT EXISTS Castigos_Perdida (
+      id VARCHAR(36) NOT NULL PRIMARY KEY,
+      prestamo_id VARCHAR(36) NOT NULL,
+      cliente_id VARCHAR(36) NOT NULL,
+      admin_id VARCHAR(36) DEFAULT NULL,
+      motivo TEXT NOT NULL,
+      monto_perdida DECIMAL(12,2) NOT NULL,
+      monto_desembolsado DECIMAL(12,2) NOT NULL,
+      monto_pagado_acumulado DECIMAL(12,2) NOT NULL DEFAULT 0,
+      saldo_anterior DECIMAL(12,2) NOT NULL,
+      dias_vencido INT DEFAULT 0,
+      fecha_vencimiento DATE DEFAULT NULL,
+      fecha_castigo DATETIME NOT NULL,
+      is_synced TINYINT(1) DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      deleted_at DATETIME DEFAULT NULL,
+      KEY idx_castigo_fecha (fecha_castigo, deleted_at),
+      KEY idx_castigo_prestamo (prestamo_id),
+      KEY idx_castigo_cliente (cliente_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`,
   ];
   for (const sql of alters) {
     try {

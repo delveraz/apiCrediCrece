@@ -60,6 +60,7 @@ app.put('/api/admin/contadores/:id', admin.updateContador);
 app.post('/api/admin/contadores/:id/reset-password', admin.resetPasswordUsuario);
 app.post('/api/admin/usuarios/:id/reset-password', admin.resetPasswordUsuario);
 app.post('/api/admin/prorrogas', admin.aplicarProrroga);
+app.post('/api/admin/prestamos/:id/castigo-perdida', admin.castigarPerdida);
 app.get('/api/admin/export/cartera-importacion', admin.exportCarteraImportacion);
 app.get('/api/admin/prestamos', admin.listPrestamosActivos);
 app.put('/api/admin/prestamos/:id/frecuencia', admin.updatePrestamoFrecuencia);

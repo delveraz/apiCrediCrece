@@ -33,7 +33,7 @@ const { aplicarProrrogaEnNube } = require('../utils/prorrogasNube');
 const { aplicarCastigoPerdidaEnNube } = require('../utils/castigoPerdidaNube');
 const { armarReportePerdidas } = require('../utils/reportePerdidas');
 const { armarReporteVencidos } = require('../utils/reporteVencidos');
-const { aplicarMontoACuotas, revertirMontoDeCuotas } = require('../utils/registrarPagoNube');
+const { aplicarMontoACuotas, revertirMontoDeCuotas, recalcularSaldoPrestamoDesdeCuotas } = require('../utils/registrarPagoNube');
 const { rangoDiaLocal, rangoPeriodoLocal } = require('../utils/fechasSql');
 const { hoyISO } = require('../utils/zonaHoraria');
 const { generarRespaldoSql } = require('../utils/respaldoSql');
@@ -1158,6 +1158,72 @@ async function updatePago(req, res) {
   }
 }
 
+/** Anula un abono (soft delete): revierte cuotas y saldo como si no hubiera cobro. */
+async function deletePago(req, res) {
+  const conn = await getConnection();
+  try {
+    const { id } = req.params;
+
+    await conn.beginTransaction();
+    const [rows] = await conn.execute(
+      `SELECT pg.id, pg.prestamo_id, pg.monto_pagado, pg.cobrador_id
+       FROM Pagos pg WHERE pg.id = ? AND pg.deleted_at IS NULL LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: 'Abono no encontrado o ya anulado' });
+    }
+
+    const pago = rows[0];
+    const monto = Number(pago.monto_pagado);
+    if (!Number.isFinite(monto) || monto <= 0) {
+      await conn.rollback();
+      return res.status(400).json({ success: false, message: 'Monto invalido' });
+    }
+
+    await revertirMontoDeCuotas(conn, pago.prestamo_id, monto);
+    const saldoNuevo = await recalcularSaldoPrestamoDesdeCuotas(conn, pago.prestamo_id);
+
+    await conn.execute(
+      `UPDATE Pagos SET deleted_at = NOW(), updated_at = NOW(), is_synced = 1, editado_por_admin_at = NOW()
+       WHERE id = ?`,
+      [id]
+    );
+
+    await conn.execute(
+      `UPDATE Solicitudes_Correccion_Cobro SET estado = 'RESUELTA', updated_at = NOW()
+       WHERE pago_id = ? AND estado = 'PENDIENTE' AND deleted_at IS NULL`,
+      [id]
+    );
+
+    await conn.commit();
+
+    const [prest] = await conn.execute(
+      `SELECT saldo_pendiente, estado FROM Prestamos WHERE id = ?`,
+      [pago.prestamo_id]
+    );
+
+    return res.json({
+      success: true,
+      message: 'Abono anulado. El credito quedo como si no se hubiera cobrado.',
+      data: {
+        pago_id: id,
+        prestamo_id: pago.prestamo_id,
+        cobrador_id: pago.cobrador_id,
+        monto_anulado: monto,
+        saldo_pendiente: prest[0]?.saldo_pendiente ?? saldoNuevo,
+        estado_prestamo: prest[0]?.estado,
+      },
+    });
+  } catch (e) {
+    await conn.rollback();
+    return res.status(500).json({ success: false, message: e.message });
+  } finally {
+    conn.release();
+  }
+}
+
 async function listSolicitudesCorreccion(req, res) {
   try {
     const estado = req.query.estado || 'PENDIENTE';
@@ -1899,6 +1965,7 @@ module.exports = {
   listPagosDetalle,
   getEstadoCuentaCliente,
   updatePago,
+  deletePago,
   listSolicitudesCorreccion,
   syncRutasCobradores,
   optimizarRuta,

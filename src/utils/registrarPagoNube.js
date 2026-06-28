@@ -201,9 +201,26 @@ async function registrarGestionNoPagoEnNube(conn, opts) {
   return { id, cobrador_id: cobradorRegistro };
 }
 
+async function recalcularSaldoPrestamoDesdeCuotas(conn, prestamoId) {
+  const [rows] = await conn.execute(
+    `SELECT COALESCE(SUM(GREATEST(0, monto_programado - COALESCE(monto_pagado, 0))), 0) AS saldo
+     FROM Cuotas_Calendario
+     WHERE prestamo_id = ? AND deleted_at IS NULL`,
+    [prestamoId]
+  );
+  const saldo = Number(Number(rows[0]?.saldo || 0).toFixed(2));
+  const estado = saldo <= 0.01 ? 'Pagado' : 'Activo';
+  await conn.execute(
+    `UPDATE Prestamos SET saldo_pendiente = ?, estado = ?, updated_at = NOW(), is_synced = 1 WHERE id = ?`,
+    [saldo, estado, prestamoId]
+  );
+  return saldo;
+}
+
 module.exports = {
   registrarPagoEnNube,
   registrarGestionNoPagoEnNube,
   aplicarMontoACuotas,
   revertirMontoDeCuotas,
+  recalcularSaldoPrestamoDesdeCuotas,
 };

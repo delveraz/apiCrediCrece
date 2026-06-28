@@ -74,6 +74,7 @@ app.get('/api/admin/pagos', admin.listPagosDelDia);
 app.get('/api/admin/pagos/detalle', admin.listPagosDetalle);
 app.get('/api/admin/clientes/:id/estado-cuenta', admin.getEstadoCuentaCliente);
 app.put('/api/admin/pagos/:id', admin.updatePago);
+app.delete('/api/admin/pagos/:id', admin.deletePago);
 app.get('/api/admin/solicitudes-correccion', admin.listSolicitudesCorreccion);
 app.get('/api/admin/rutas', admin.listRutas);
 app.post('/api/admin/rutas', admin.crearRuta);

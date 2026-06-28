@@ -1121,10 +1121,9 @@ async function cargarCorreccionesAdmin(cobradorId, desde) {
   const pagos = await query(
     `SELECT pg.id, pg.prestamo_id, pg.cobrador_id, pg.monto_pagado, pg.fecha_pago,
             pg.latitud, pg.longitud, pg.registrado_por_admin, pg.operador_id,
-            pg.updated_at, pg.editado_por_admin_at
+            pg.updated_at, pg.editado_por_admin_at, pg.deleted_at
      FROM Pagos pg
-     WHERE pg.cobrador_id = ? AND pg.deleted_at IS NULL
-       AND pg.editado_por_admin_at IS NOT NULL
+     WHERE pg.cobrador_id = ? AND pg.editado_por_admin_at IS NOT NULL
        AND pg.editado_por_admin_at > ?
      ORDER BY pg.editado_por_admin_at ASC`,
     [cobradorId, desde]
@@ -1183,8 +1182,7 @@ async function syncAviso(req, res) {
 
     const correcciones = await query(
       `SELECT COUNT(*) AS n FROM Pagos
-       WHERE cobrador_id = ? AND deleted_at IS NULL
-         AND editado_por_admin_at IS NOT NULL
+       WHERE cobrador_id = ? AND editado_por_admin_at IS NOT NULL
          AND editado_por_admin_at > ?`,
       [cobradorId, desde]
     );
